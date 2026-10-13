@@ -20,6 +20,13 @@ dist/
 *.sql
 *.log
 *.wav
+*.mp3
+*.ogg
+*.webm
+*.flac
+# Voice models (Kokoro, Whisper) stay in ~/.local/share and ~/.cache/huggingface.
+*.onnx
+*.bin
 anthropic-key
 *.key
 .env

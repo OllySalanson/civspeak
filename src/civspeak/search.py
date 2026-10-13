@@ -48,6 +48,10 @@ def singular(tok: str) -> str:
     return tok
 
 
+# Questions are matched after singular(), so "does" arrives as "doe": stop those forms too.
+STOPWORDS |= {singular(w) for w in STOPWORDS}
+
+
 def tokens(text: str) -> list[str]:
     return [singular(t) for t in _WORD.findall(ascii_fold(text).lower().replace("'", ""))]
 
@@ -101,6 +105,8 @@ class Index:
         for norm in self.by_norm:
             self.by_len[len(norm.split())].append(norm)
             self.by_first[norm[:4]].append(norm)
+        self.placeable = {r[0] for r in self.db.execute("""SELECT id FROM pages WHERE facts LIKE '%"heading": "Placement"%'""")}
+        self.sound_keys = sorted(k for k in self.by_sound if len(k) >= 3 and " " not in k)
 
     def close(self) -> None:
         self.db.close()
@@ -128,6 +134,11 @@ class Index:
 
     def titles(self) -> list[str]:
         return [r[0] for r in self.db.execute("SELECT title FROM pages ORDER BY title")]
+
+    def name_list(self) -> list[tuple[str, str, str, bool]]:
+        """(section id, group, title, unique to a civilization) of every page, in Civilopedia order."""
+        rows = self.db.execute("SELECT section_id, grp, title, facts FROM pages ORDER BY id")
+        return [(r[0], r[1] or "", r[2], any(g["heading"] == "Unique To" for g in json.loads(r[3]))) for r in rows]
 
     # -- search ----------------------------------------------------------------------------
 
@@ -174,6 +185,20 @@ class Index:
                 for name in self.by_norm[norm]:
                     bump(name.page, 0.9 * ratio + 0.03 * n, f"close to '{gram}'")
 
+        if max(scores.values(), default=0) < 0.8:
+            # Nothing named outright: the speech recognizer may have misheard a name, so accept a
+            # near match on its sound ("embancer" -> Mbanza, "amanita" -> Amanitore).
+            for gram, n in grams.items():
+                if n > 2 or any(t in STOPWORDS or t in WEAK for t in gram.split()):
+                    continue
+                compact = phrase_key(gram).replace(" ", "")
+                if len(compact) < 4:
+                    continue
+                for skey in difflib.get_close_matches(compact, self.sound_keys, n=3, cutoff=0.75):
+                    ratio = difflib.SequenceMatcher(None, compact, skey).ratio()
+                    for name in self.by_sound[skey]:
+                        bump(name.page, 0.7 * ratio + 0.03 * n, f"sounds close to '{gram}'")
+
         # Multi-word names whose meaningful words all appear somewhere in the question.
         qset = set(content)
         for t in qset:
@@ -194,13 +219,16 @@ class Index:
             if not why[page]:
                 why[page] = ["text match"]
 
+        placement = bool(PLACEMENT_WORDS & set(qtoks))
         ranked = []
         for page, score in scores.items():
             score *= SECTION_WEIGHT.get(self.sections.get(page, ""), 1.0)
+            if placement and page in self.placeable:
+                score += 0.05  # "where can I build X": X is something with placement rules
             ranked.append((score, page))
         ranked.sort(key=lambda x: (-x[0], x[1]))
         hits = [Hit(self.page(p), round(s, 3), why[p]) for s, p in ranked[:k] if s > 0.05]
-        if hits and PLACEMENT_WORDS & set(qtoks):
+        if hits and placement:
             self._add_section_concept(hits)
         return hits
 

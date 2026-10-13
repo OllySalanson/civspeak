@@ -13,11 +13,19 @@
     <div class="meta">
       <span id="source" class="chip">Loading the Civilopedia...</span>
       <span id="spend" class="chip" hidden></span>
+      <button id="voice" type="button" class="chip toggle" aria-pressed="true">Voice on</button>
     </div>
   </header>
 
   <main>
     <form id="ask" class="ask" autocomplete="off">
+      <button id="mic" type="button" class="mic" data-state="idle" aria-pressed="false" aria-label="Ask out loud"
+              title="Ask out loud: click, or hold ` (the key under Esc)">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="9" y="3" width="6" height="11" rx="3"/>
+          <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/>
+        </svg>
+      </button>
       <label for="question" class="visually-hidden">Ask the Civilopedia</label>
       <input id="question" name="question" type="text" maxlength="500"
              placeholder="Ask the Civilopedia, e.g. where can I build a Campus?" autofocus>
@@ -26,6 +34,10 @@
 
     <section class="answer" aria-live="polite">
       <p id="status" class="status" hidden></p>
+      <p id="speaking" class="speaking" hidden>
+        <span class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span>Speaking
+        <button id="stop-speaking" type="button">Stop <kbd>Esc</kbd></button>
+      </p>
       <p id="answer" class="answer-text" hidden></p>
       <p id="problem" class="problem" hidden></p>
     </section>
@@ -33,8 +45,9 @@
     <section id="entries" class="entries" aria-label="Civilopedia entries"></section>
 
     <section id="welcome" class="welcome">
-      <p>Ask about anything in the Civilopedia: what something does, what it needs, or where it has to be built.
-        The answer is short; the full entries appear underneath.</p>
+      <p>Click the microphone, or hold <kbd>`</kbd> (the key under Esc), and ask about anything in the Civilopedia:
+        what something does, what it needs, or where it has to be built. George reads out a short answer and the full
+        entries appear underneath. You can type a question too.</p>
       <p class="tries">Try:
         <button type="button" class="try">Where can I build a Campus?</button>
         <button type="button" class="try">What does a Ziggurat do?</button>

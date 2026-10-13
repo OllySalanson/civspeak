@@ -46,6 +46,17 @@ def spend_file() -> Path:
     return data_dir() / "spend.jsonl"
 
 
+def kokoro_files() -> tuple[Path, Path]:
+    """The Kokoro model and voice pack (shared with the pixel-explainer narrator by default)."""
+    base = Path(os.environ.get("CIVSPEAK_KOKORO_DIR") or os.path.expanduser("~/.local/share/pixel-explainer"))
+    return base / "kokoro-v1.0.onnx", base / "voices-v1.0.bin"
+
+
+def whisper_model() -> str:
+    """A faster-whisper model name, read from the Hugging Face cache (never downloaded at run time)."""
+    return os.environ.get("CIVSPEAK_WHISPER_MODEL") or "base.en"
+
+
 def _first_existing(candidates: list[str]) -> Path | None:
     for c in candidates:
         if c and os.path.isdir(c):

@@ -66,13 +66,13 @@ main { max-width: 1240px; margin: 0 auto; padding: 28px 32px 64px; }
   font: inherit; cursor: pointer; border-radius: var(--radius);
 }
 
-.ask button {
+.ask button[type="submit"] {
   font-size: 20px; font-weight: 600; padding: 0 28px;
   color: #1b1405; background: var(--gold); border: 0;
 }
 
-.ask button:hover { filter: brightness(1.08); }
-.ask button:disabled { opacity: 0.6; cursor: progress; }
+.ask button[type="submit"]:hover { filter: brightness(1.08); }
+.ask button[type="submit"]:disabled { opacity: 0.6; cursor: progress; }
 
 .answer { margin: 26px 0 8px; }
 
@@ -150,4 +150,75 @@ details.chapter[open] summary { color: var(--gold); }
   .top, main { padding-left: 16px; padding-right: 16px; }
   .answer-text { font-size: 24px; }
   .facts { grid-template-columns: 1fr; }
+}
+
+/* -- Voice: the mic button, the voice toggle and the speaking indicator ----------------------- */
+
+.chip.toggle { font: inherit; font-size: 14px; cursor: pointer; }
+.chip.toggle[aria-pressed="true"] { color: var(--gold); border-color: rgba(224, 187, 99, 0.5); }
+.chip.toggle:hover:not(:disabled) { border-color: var(--gold); }
+.chip.toggle:disabled { cursor: default; }
+
+.ask .mic {
+  --level: 0;
+  position: relative; flex: none; align-self: center; width: 60px; height: 60px; padding: 0;
+  display: grid; place-items: center; border-radius: 50%;
+  color: var(--gold); background: var(--panel); border: 1px solid var(--line);
+  touch-action: none; user-select: none;
+}
+.mic svg {
+  width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.9;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.mic svg rect { fill: currentColor; fill-opacity: 0.18; }
+.mic:hover:not(:disabled) { border-color: var(--gold); }
+.mic:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--gold-soft); border-color: var(--gold); }
+.mic:disabled { cursor: not-allowed; color: #6c7a94; }
+
+.mic::after {
+  content: ""; position: absolute; inset: -1px; border-radius: 50%; pointer-events: none;
+  border: 2px solid transparent; transition: transform 90ms linear, opacity 90ms linear;
+}
+
+.mic[data-state="listening"] { color: #1b1405; background: var(--gold); border-color: var(--gold); }
+.mic[data-state="listening"] svg rect { fill-opacity: 0.35; }
+.mic[data-state="listening"]::after {
+  border-color: var(--gold); opacity: calc(0.35 + var(--level) * 0.65);
+  transform: scale(calc(1.08 + var(--level) * 0.3));
+}
+.mic[data-state="starting"], .mic[data-state="working"] { border-color: var(--gold); }
+.mic[data-state="working"]::after {
+  border-color: var(--gold) transparent transparent transparent; animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(1turn); } }
+
+.speaking {
+  display: flex; align-items: center; gap: 10px; margin: 0 0 12px; color: var(--muted); font-size: 16px;
+}
+.speaking[hidden] { display: none; }
+.speaking .bars { display: inline-flex; align-items: center; gap: 3px; height: 18px; }
+.speaking .bars i {
+  display: block; width: 3px; height: 100%; border-radius: 2px; background: var(--gold);
+  animation: talk 0.9s ease-in-out infinite;
+}
+.speaking .bars i:nth-child(2) { animation-delay: -0.6s; }
+.speaking .bars i:nth-child(3) { animation-delay: -0.3s; }
+.speaking .bars i:nth-child(4) { animation-delay: -0.75s; }
+
+@keyframes talk { 0%, 100% { transform: scaleY(0.3); } 50% { transform: scaleY(1); } }
+
+.speaking button {
+  font: inherit; font-size: 14px; cursor: pointer; margin-left: 4px; padding: 3px 10px;
+  color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px;
+}
+.speaking button:hover { border-color: var(--gold); }
+
+kbd {
+  font: 600 0.8em/1 ui-monospace, Consolas, monospace; padding: 2px 5px; border-radius: 4px;
+  color: var(--text); background: var(--panel-2); border: 1px solid var(--line);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .speaking .bars i, .mic[data-state="working"]::after { animation: none; }
 }

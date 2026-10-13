@@ -87,6 +87,8 @@ def cmd_ask(args) -> int:
 def cmd_serve(args) -> int:
     from .server import serve
 
+    # Speech recognition and the voice run in this process: keep them below everything else.
+    _nice()
     return serve(port=args.port, open_browser=args.open)
 
 

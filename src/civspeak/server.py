@@ -1,12 +1,15 @@
 """A small local web server for the answer page.
 
-GET  /             the page
-GET  /api/status   index age, entry count, key present, this month's spend
-POST /api/ask      {"question": "..."} -> text/event-stream of:
-                     entries  the matched Civilopedia entries (always sent first)
-                     delta    answer text as it streams
-                     done     final answer, entries used, cost and month total
-                     problem  why there is no answer (no key, monthly limit, API error)
+GET  /                   the page
+GET  /api/status         index age, entry count, key present, this month's spend, voice and mic
+POST /api/ask            {"question": "...", "speak": true, "spoken": false} -> text/event-stream of:
+                           entries  the matched Civilopedia entries (always sent first)
+                           delta    answer text as it streams
+                           say      {"url": ...} the next sentence, spoken (when speak is on)
+                           done     final answer, entries used, cost and month total
+                           problem  why there is no answer (no key, monthly limit, API error)
+GET  /api/speech/ID/N    sentence N of an answer as WAV (waits until George has said it)
+POST /api/listen         a recorded question (audio/wav) -> {"text": "...", "seconds": ...}
 """
 
 from __future__ import annotations
@@ -14,10 +17,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import secrets
 import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import CancelledError
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
@@ -26,7 +32,9 @@ from pathlib import Path
 from . import index as index_mod
 from . import paths, spend
 from .answer import Answerer, AnswerError, KeyMissing
+from .hearing import BadAudio, Ears
 from .search import Index
+from .speech import Narrator, SentenceSplitter, Voice
 
 log = logging.getLogger(__name__)
 
@@ -35,17 +43,32 @@ STATIC = {
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
     "/favicon.svg": ("favicon.svg", "image/svg+xml"),
+    "/recorder.js": ("recorder.js", "text/javascript; charset=utf-8"),
 }
 MAX_QUESTION = 500
+MAX_RECORDING = 4_000_000  # bytes: about two minutes of 16 kHz WAV; the page stops at 15 seconds
 STALE_CHECK_SECONDS = 10
+SPEECH_URL = re.compile(r"^/api/speech/([A-Za-z0-9_-]{6,32})/(\d{1,3})$")
+
+# What George says when there is no answer to read out.
+SPOKEN_PROBLEMS = {
+    "no_index": "The Civilopedia is still being built from your game. Try again in a moment.",
+    "no_key": "There's no Claude key set up yet, so I can't answer. The entries are on screen.",
+    "cap": "The monthly limit is reached, so I can't answer until next month. The entries are on screen.",
+    "api": "Claude isn't answering right now. The entries are on screen.",
+}
+NOT_HEARD = "Sorry, I didn't catch that."
 
 
 class State:
     """The current index, plus a background rebuild when the game's cache or log changes."""
 
-    def __init__(self, index_path: Path, answerer: Answerer):
+    def __init__(self, index_path: Path, answerer: Answerer, voice: Voice | None = None, ears: Ears | None = None):
         self.index_path = index_path
         self.answerer = answerer
+        self.voice = voice or Voice()
+        self.narrator = Narrator(self.voice)
+        self.ears = ears or Ears()
         self.lock = threading.Lock()
         self.index: Index | None = None
         self.building = False
@@ -109,7 +132,22 @@ class State:
             "key": key.exists() and key.stat().st_size > 0,
             "spent": round(ledger.month_total(), 4),
             "cap": ledger.cap,
+            "voice": {"problem": self.voice.problem(), "ready": self.voice.loaded},
+            "mic": {"problem": self.ears.problem(), "ready": self.ears.loaded},
         }
+
+    def warm_up(self) -> None:
+        """Load George and Whisper in the background, so the first question is not slow."""
+        if not self.voice.problem():
+            self.narrator.warm_up()
+        if not self.ears.problem():
+            threading.Thread(target=self._load_ears, daemon=True).start()
+
+    def _load_ears(self) -> None:
+        try:
+            self.ears.hint(self.index)
+        except RuntimeError as e:
+            log.warning("%s", e)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -139,10 +177,31 @@ class Handler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.OK, body, ctype)
         elif path == "/api/status":
             self._json(HTTPStatus.OK, self.state.status())
+        elif m := SPEECH_URL.match(path):
+            self._speech(m.group(1), int(m.group(2)))
         else:
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
+    def _speech(self, answer_id: str, n: int) -> None:
+        clip = self.state.narrator.clip(answer_id, n)
+        if clip is None:
+            self._json(HTTPStatus.NOT_FOUND, {"error": "no such sentence"})
+            return
+        try:
+            wav = clip.result(timeout=60)
+        except CancelledError:
+            self._json(HTTPStatus.GONE, {"error": "a newer answer replaced this one"})
+            return
+        except Exception as e:  # synthesis failed; the page just skips this sentence
+            log.warning("could not voice a sentence: %s", e)
+            self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "could not voice this sentence"})
+            return
+        self._send(HTTPStatus.OK, wav, "audio/wav")
+
     def do_POST(self):
+        if self.path.split("?", 1)[0] == "/api/listen":
+            self._listen(speak="speak=1" in self.path)
+            return
         if self.path != "/api/ask":
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
@@ -154,7 +213,9 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(min(length, 10_000)) or b"{}")
             question = str(payload.get("question", "")).strip()[:MAX_QUESTION]
-        except (ValueError, json.JSONDecodeError):
+            speak = bool(payload.get("speak", False))
+            spoken = bool(payload.get("spoken", False))
+        except (ValueError, json.JSONDecodeError, AttributeError):
             self._json(HTTPStatus.BAD_REQUEST, {"error": "bad request"})
             return
         if not question:
@@ -166,16 +227,62 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
+        speaker = self._speaker(speak)
         try:
-            self._answer(question)
+            self._answer(question, speaker, spoken)
         except (BrokenPipeError, ConnectionResetError):
-            pass
+            if speaker:
+                speaker.cancel()
+
+    def _speaker(self, speak: bool) -> Speaker | None:
+        """Someone to voice this answer, if the page wants it spoken and George is available."""
+        if not speak or self.state.voice.problem():
+            return None
+        return Speaker(self.state.narrator, self._event)
+
+    def _listen(self, speak: bool) -> None:
+        # audio/wav cannot be posted cross-site without a CORS preflight, which this server never grants.
+        if self.headers.get("Content-Type", "").split(";")[0] != "audio/wav":
+            self._json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": "expected audio/wav"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = -1
+        if not 0 < length <= MAX_RECORDING:
+            self._json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "recording missing or too long"})
+            return
+        audio = self.rfile.read(length)
+        ears = self.state.ears
+        if ears.problem():
+            self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": ears.problem()})
+            return
+        try:
+            heard = ears.transcribe(audio, self.state.index)
+        except BadAudio as e:
+            self._json(HTTPStatus.BAD_REQUEST, {"error": str(e)})
+            return
+        except RuntimeError as e:  # the model could not be loaded
+            self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(e)})
+            return
+        reply = {"text": heard.text, "seconds": heard.seconds, "audio_seconds": heard.audio_seconds}
+        if not heard.text and speak and not self.state.voice.problem():
+            narrator = self.state.narrator
+            answer_id = secrets.token_urlsafe(9)
+            narrator.start(answer_id)
+            reply["say"] = {"url": f"/api/speech/{answer_id}/{narrator.say(answer_id, NOT_HEARD)}", "text": NOT_HEARD}
+        self._json(HTTPStatus.OK, reply)
 
     def _event(self, name: str, data) -> None:
         self.wfile.write(f"event: {name}\ndata: {json.dumps(data)}\n\n".encode())
         self.wfile.flush()
 
-    def _answer(self, question: str) -> None:
+    def _problem(self, kind: str, message: str, speaker: Speaker | None) -> None:
+        self._event("problem", {"kind": kind, "message": message})
+        if speaker:
+            speaker.say(SPOKEN_PROBLEMS[kind])
+
+    def _answer(self, question: str, speaker: Speaker | None, spoken: bool) -> None:
         state = self.state
         state.check()
         idx = state.index
@@ -183,20 +290,24 @@ class Handler(BaseHTTPRequestHandler):
             message = (
                 state.build_error or "The Civilopedia index is still being built from your game. Try again in a few seconds."
             )
-            self._event("problem", {"kind": "no_index", "message": message})
+            self._problem("no_index", message, speaker)
             return
         hits = idx.search(question, k=6)
         self._event("entries", [{"score": h.score, **h.page} for h in hits])
         started = time.monotonic()
         try:
             first = None
-            for kind, value in state.answerer.stream(question, hits):
+            for kind, value in state.answerer.stream(question, hits, spoken=spoken):
                 if kind == "delta":
                     if first is None:
                         first = time.monotonic() - started
                     self._event("delta", value)
+                    if speaker:
+                        speaker.feed(value)
                 else:
                     r = value
+                    if speaker:
+                        speaker.finish()
                     self._event(
                         "done",
                         {
@@ -212,31 +323,53 @@ class Handler(BaseHTTPRequestHandler):
                     )
                     log.info("answered in %.1fs (first text %.1fs), $%.4f", time.monotonic() - started, first or 0, r.cost_usd)
         except KeyMissing:
-            self._event(
-                "problem",
-                {
-                    "kind": "no_key",
-                    "message": "No Claude API key is set up yet, so there is no spoken answer. "
-                    "The matching Civilopedia entries are below.",
-                },
+            self._problem(
+                "no_key",
+                "No Claude API key is set up yet, so there is no spoken answer. The matching Civilopedia entries are below.",
+                speaker,
             )
         except spend.CapReached as e:
-            self._event(
-                "problem",
-                {
-                    "kind": "cap",
-                    "message": f"Monthly limit reached (${e.spent:.2f} of ${e.cap:.2f}). "
-                    "Answers start again next month; the Civilopedia entries below still work.",
-                },
+            self._problem(
+                "cap",
+                f"Monthly limit reached (${e.spent:.2f} of ${e.cap:.2f}). "
+                "Answers start again next month; the Civilopedia entries below still work.",
+                speaker,
             )
         except AnswerError as e:
-            self._event("problem", {"kind": "api", "message": str(e)})
+            self._problem("api", str(e), speaker)
+
+
+class Speaker:
+    """Voices one answer: cuts the streamed text into sentences and tells the page where each is."""
+
+    def __init__(self, narrator: Narrator, event):
+        self.narrator = narrator
+        self.event = event
+        self.answer_id = secrets.token_urlsafe(9)
+        self.splitter = SentenceSplitter()
+        narrator.start(self.answer_id)
+
+    def say(self, sentence: str) -> None:
+        n = self.narrator.say(self.answer_id, sentence)
+        self.event("say", {"url": f"/api/speech/{self.answer_id}/{n}", "text": sentence})
+
+    def feed(self, text: str) -> None:
+        for sentence in self.splitter.feed(text):
+            self.say(sentence)
+
+    def finish(self) -> None:
+        for sentence in self.splitter.flush():
+            self.say(sentence)
+
+    def cancel(self) -> None:
+        self.narrator.cancel(self.answer_id)
 
 
 def serve(port: int = 8765, open_browser: bool = False, host: str = "127.0.0.1") -> int:
     answerer = Answerer()
     state = State(paths.index_file(), answerer)
     state.check()
+    state.warm_up()
     Handler.state = state
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.daemon_threads = True

@@ -30,9 +30,10 @@ SYSTEM_PROMPT = """You are Civspeak, a voice Civilopedia for Sid Meier's Civiliz
 Each request gives you numbered Civilopedia entries taken from the player's own installed game, followed by the question. The entries come from the exact rule set of the player's last game, including the Gathering Storm expansion, DLC and gameplay mods such as Better Balanced Game, so their numbers can differ from the stock game and from anything you remember. Those entries are your only source of truth.
 
 How to answer:
-- Answer in one to three short sentences that sound natural when spoken. Put the most useful fact first; the first sentence should be short so the voice can start quickly.
+- Answer in one to three short sentences, about 50 words at most in all, that sound natural when spoken. Open with a short sentence of no more than 12 words that answers the question directly, because the voice starts reading as soon as that first sentence is written; then give the key details.
 - Use only facts stated in the entries. Never add numbers, rules, strategy tips or history from your own memory of Civilization VI, even if you are confident, because the player's mods may have changed them.
 - If the entries do not answer the question, say so plainly in one sentence and name the closest entry instead, for example: "The Civilopedia entries I found don't say; the closest is the Harbor page."
+- A question marked as spoken was written down by speech recognition, so a name in it may be misheard or misspelt (for example "Congo" for Kongo, or "embancer" for Mbanza). Treat it as the entry whose name sounds most like it, and say that entry's correct name in your answer.
 - If the question is ambiguous between entries (for example a district and a historic moment with the same name), answer about the one the player most likely means and mention the other briefly only if it matters.
 - For "where can it be built" questions, give the placement rules and any adjacency or terrain requirements stated in the entries.
 - For "what does it do" questions, give the effect and the key numbers (yields, combat strength, cost) stated in the entries.
@@ -65,12 +66,13 @@ def read_key(path: Path | None = None) -> str:
     return key
 
 
-def build_user_message(question: str, hits: list[Hit]) -> str:
+def build_user_message(question: str, hits: list[Hit], spoken: bool = False) -> str:
     blocks = []
     for n, hit in enumerate(hits, 1):
         blocks.append(f'<entry number="{n}">\n{entry_text(hit.page)}\n</entry>')
     entries = "\n\n".join(blocks) if blocks else "(No Civilopedia entries matched this question.)"
-    return f"<entries>\n{entries}\n</entries>\n\nQuestion: {question.strip()}"
+    label = "Question (spoken aloud and written down by speech recognition, so names may be misheard)" if spoken else "Question"
+    return f"<entries>\n{entries}\n</entries>\n\n{label}: {question.strip()}"
 
 
 def estimate_tokens(text: str) -> int:
@@ -100,6 +102,11 @@ def split_used(text: str) -> tuple[str, list[int]]:
     return text[: m.start()].strip(), numbers
 
 
+def plain(text: str) -> str:
+    """Drop markdown emphasis the model sometimes adds anyway (it would show as **...** on the page)."""
+    return re.sub(r"[*`]+", "", text)
+
+
 class SpokenFilter:
     """Streams answer text but holds back anything that might be the start of the USED: line."""
 
@@ -127,7 +134,7 @@ class SpokenFilter:
             safe = self.buffer[:safe_len].rstrip()
         out = safe[self.emitted :]
         self.emitted = max(self.emitted, len(safe))
-        return out
+        return plain(out)
 
 
 class Answerer:
@@ -147,7 +154,7 @@ class Answerer:
             self._client_key_hash = h
         return self._client
 
-    def stream(self, question: str, hits: list[Hit]) -> Iterator[tuple[str, object]]:
+    def stream(self, question: str, hits: list[Hit], spoken: bool = False) -> Iterator[tuple[str, object]]:
         """Yields ("delta", text) while the answer streams, then ("done", Result).
 
         Raises KeyMissing, spend.CapReached or AnswerError before anything is spent.
@@ -155,11 +162,11 @@ class Answerer:
         import anthropic
 
         key = read_key(self.key_path)
-        user = build_user_message(question, hits)
+        user = build_user_message(question, hits, spoken)
         reserve = spend.worst_case_usd(estimate_tokens(SYSTEM_PROMPT + user), MAX_TOKENS)
         reservation = self.ledger.reserve(reserve)
         client = self._client_for(key)
-        spoken = SpokenFilter()
+        speakable = SpokenFilter()
         try:
             with client.beta.messages.stream(
                 model=MODEL,
@@ -171,13 +178,13 @@ class Answerer:
                 messages=[{"role": "user", "content": user}],
             ) as stream:
                 for text in stream.text_stream:
-                    out = spoken.feed(text)
+                    out = speakable.feed(text)
                     if out:
                         yield "delta", out
                 final = stream.get_final_message()
         except (anthropic.APIConnectionError, anthropic.APIStatusError) as e:
             status = getattr(e, "status_code", None)
-            if spoken.buffer:
+            if speakable.buffer:
                 # Failed part-way through: tokens may have been billed, so keep the worst case.
                 reservation.settle(reserve, error=type(e).__name__)
             else:
@@ -189,10 +196,11 @@ class Answerer:
         total = reservation.settle(cost, model=final.model, **usage)
         text = "".join(b.text for b in final.content if getattr(b, "type", "") == "text")
         answer, used = split_used(text)
+        answer = plain(answer)
         refused = final.stop_reason == "refusal"
         if refused and not answer:
             answer = "Sorry, I can't answer that one."
-        emitted = spoken.buffer[: spoken.emitted].strip()
+        emitted = plain(speakable.buffer[: speakable.emitted]).strip()
         tail = answer[len(emitted) :] if answer.startswith(emitted) else ""
         if tail:
             yield "delta", tail
