@@ -12,6 +12,8 @@ dependencies = ["anthropic>=1.13"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]
+# George's voice (Kokoro) and the microphone (Whisper). Without them the page still answers typed questions.
+voice = ["kokoro-onnx>=0.6", "faster-whisper>=1.2", "numpy>=1.26"]
 
 [project.scripts]
 civspeak = "civspeak.cli:main"

@@ -83,6 +83,14 @@ def test_used_line_is_never_spoken():
     assert split_used("Answer.\nUSED: none") == ("Answer.", [])
 
 
+def test_markdown_emphasis_never_shows(tmp_path, key_file):
+    a = Answerer(spend.Ledger(tmp_path / "spend.jsonl"), key_file)
+    a._client_for = lambda key: FakeClient(["**The Thinkery** goes", " on *Meadow*.", "\nUSED: 1"])
+    events = list(a.stream("q", [hit()]))
+    assert "".join(v for k, v in events if k == "delta") == "The Thinkery goes on Meadow."
+    assert events[-1][1].text == "The Thinkery goes on Meadow."
+
+
 def test_stream_request_shape_cost_and_settlement(tmp_path, key_file):
     ledger = spend.Ledger(tmp_path / "spend.jsonl")
     a = Answerer(ledger, key_file)

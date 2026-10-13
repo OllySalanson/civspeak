@@ -2,7 +2,8 @@
 """Refuse to commit Firaxis or mod content, game files, the built index or the API key.
 
 Checks every file git would commit (tracked plus staged, using the staged version):
-- no game or index file types (.sqlite, .xml, .sql, .modinfo, .blp, ...), no key files;
+- no game or index file types (.sqlite, .xml, .sql, .modinfo, .blp, ...), no key files, no voice
+  models (.onnx, .bin) and no recordings;
 - nothing that looks like an Anthropic API key;
 - no game-style text rows (<Row ...><Text>) outside the made-up test fixture;
 - if the Civilopedia index has been built on this PC, no sentence from it.
@@ -36,6 +37,13 @@ FORBIDDEN_SUFFIXES = {
     ".dep",
     ".artdef",
     ".xlp",
+    # Voice models and recordings: Kokoro, Whisper, and any test audio.
+    ".onnx",
+    ".bin",
+    ".mp3",
+    ".ogg",
+    ".webm",
+    ".flac",
 }
 FORBIDDEN_NAMES = {"anthropic-key", ".env", "spend.jsonl", "index.sqlite"}
 # The only file allowed to hold game-style text rows: the invented mini game for tests.
