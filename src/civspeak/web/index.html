@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Civspeak</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="top">
+    <h1 class="brand"><span class="mark" aria-hidden="true"></span>Civspeak</h1>
+    <div class="meta">
+      <span id="source" class="chip">Loading the Civilopedia...</span>
+      <span id="spend" class="chip" hidden></span>
+    </div>
+  </header>
+
+  <main>
+    <form id="ask" class="ask" autocomplete="off">
+      <label for="question" class="visually-hidden">Ask the Civilopedia</label>
+      <input id="question" name="question" type="text" maxlength="500"
+             placeholder="Ask the Civilopedia, e.g. where can I build a Campus?" autofocus>
+      <button id="go" type="submit">Ask</button>
+    </form>
+
+    <section class="answer" aria-live="polite">
+      <p id="status" class="status" hidden></p>
+      <p id="answer" class="answer-text" hidden></p>
+      <p id="problem" class="problem" hidden></p>
+    </section>
+
+    <section id="entries" class="entries" aria-label="Civilopedia entries"></section>
+
+    <section id="welcome" class="welcome">
+      <p>Ask about anything in the Civilopedia: what something does, what it needs, or where it has to be built.
+        The answer is short; the full entries appear underneath.</p>
+      <p class="tries">Try:
+        <button type="button" class="try">Where can I build a Campus?</button>
+        <button type="button" class="try">What does a Ziggurat do?</button>
+        <button type="button" class="try">How do I get Great Prophets?</button>
+      </p>
+    </section>
+  </main>
+
+  <template id="card">
+    <article class="card">
+      <header>
+        <div class="heading">
+          <h2 class="title"></h2>
+          <span class="where"></span>
+        </div>
+        <span class="used-tag" hidden>Used in the answer</span>
+      </header>
+      <dl class="facts"></dl>
+      <div class="chapters"></div>
+    </article>
+  </template>
+
+  <script src="/app.js"></script>
+</body>
+</html>

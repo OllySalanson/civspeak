@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "civspeak"
+version = "0.1.0"
+description = "Ask the Civ VI Civilopedia out loud"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["anthropic>=1.13"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+civspeak = "civspeak.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+civspeak = ["web/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 130
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["civspeak", "conftest"]
+
+[tool.ruff.lint.per-file-ignores]
+# The answer prompt is prose; its lines are paragraphs sent to the model as written.
+"src/civspeak/answer.py" = ["E501"]
+# Invented fixture XML, kept one row per line for readability.
+"tests/conftest.py" = ["E501"]

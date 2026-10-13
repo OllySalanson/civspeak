@@ -1,0 +1,4 @@
+#!/bin/sh
+# Blocks commits that would add game files, Civilopedia text, the index or the API key.
+# Enable once per clone with:  git config core.hooksPath .githooks
+exec python3 "$(git rev-parse --show-toplevel)/tools/repo_guard.py"
