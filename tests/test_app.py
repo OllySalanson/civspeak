@@ -1,8 +1,8 @@
 """The Windows app: one process with the server, the tray and ` key, and the page window.
 
 The Windows halves (WinForms, WebView2, RegisterHotKey) only run on Windows; here they are fakes, so
-what the app decides is tested: where the page opens, what closing it does, who may use the
-microphone, how it starts and stops, and what Windows runs at login.
+what the app decides is tested: where the page opens, what closing it does, that the page is granted
+nothing, where ` goes, how it starts and stops, and what Windows runs at login.
 """
 
 import socket
@@ -40,10 +40,8 @@ class FakeWin:
 class FakeServer:
     def __init__(self, listening=True):
         self.server_address = ("127.0.0.1", 8799)
-        self.woken = []
         self.keys = []
-        self.state = types.SimpleNamespace(wake=lambda: self.woken.append(True))
-        self.talk = types.SimpleNamespace(press=lambda key: self.keys.append(key) or listening)
+        self.conversation = types.SimpleNamespace(press=lambda key: self.keys.append(key) or listening)
         self.served = threading.Event()
         self.stopped = threading.Event()
         self.closed = False
@@ -151,12 +149,10 @@ def test_closing_the_window_only_hides_it(made):
     assert not turn_off.Cancel
 
 
-def test_only_the_page_may_use_the_microphone(made, monkeypatch):
+def test_the_page_is_granted_nothing_not_even_the_microphone(made, monkeypatch):
     a, _, form = made
-    kinds = types.SimpleNamespace(Microphone="mic", Camera="camera")
-    states = types.SimpleNamespace(Allow="allow", Deny="deny")
     core = types.ModuleType("Microsoft.Web.WebView2.Core")
-    core.CoreWebView2PermissionKind, core.CoreWebView2PermissionState = kinds, states
+    core.CoreWebView2PermissionState = types.SimpleNamespace(Allow="allow", Deny="deny")
     monkeypatch.setitem(sys.modules, "Microsoft.Web.WebView2.Core", core)
 
     webview = types.SimpleNamespace(CoreWebView2=types.SimpleNamespace(PermissionRequested=Event()))
@@ -169,22 +165,17 @@ def test_only_the_page_may_use_the_microphone(made, monkeypatch):
         on_permission(None, request)
         return request.State
 
-    assert asked("mic", "http://localhost:8799/") == "allow"
+    assert asked("mic", "http://localhost:8799/") == "deny"  # this process records, not the page
     assert asked("camera", "http://localhost:8799/") == "deny"
-    assert asked("mic", "http://localhost:8800/") == "deny"
     assert asked("mic", "https://example.com/") == "deny"
 
 
-def test_same_origin():
-    assert app.same_origin("http://localhost:8765/?q=1", "http://localhost:8765")
-    assert not app.same_origin("http://localhost.example.com:8765/", "http://localhost:8765")
-    assert not app.same_origin("https://localhost:8765/", "http://localhost:8765")
-
-
-def test_a_held_key_wakes_the_voice_and_goes_to_the_page_in_this_process(made):
+def test_a_held_key_is_recorded_in_this_process_page_or_no_page(made, tmp_path):
     a, _, _ = made
     assert a.press("down") is True and a.press("up") is True
-    assert a.httpd.keys == ["down", "up"] and a.httpd.woken == [True]
+    assert a.httpd.keys == ["down", "up"]
+    no_microphone = app.App(FakeServer(listening=False), tmp_path, win=FakeWin())
+    assert no_microphone.press("down") is False  # the helper beeps
 
 
 def test_ready_opens_the_page_but_never_over_the_game(made):
@@ -261,6 +252,7 @@ def test_the_server_takes_another_port_only_when_asked(quiet_server):
         try:
             assert httpd.server_address[1] not in (0, port)
             assert httpd.RequestHandlerClass.state is httpd.state and httpd.RequestHandlerClass.talk is httpd.talk
+            assert httpd.conversation is None  # the page records and plays, unless the Windows app asks
         finally:
             httpd.server_close()
     finally:

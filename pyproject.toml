@@ -14,8 +14,9 @@ dependencies = ["anthropic>=1.13"]
 dev = ["pytest>=8", "ruff>=0.6"]
 # George's voice (Kokoro) and the microphone (Whisper). Without them the page still answers typed questions.
 voice = ["kokoro-onnx>=0.6", "faster-whisper>=1.2", "numpy>=1.26"]
-# The Windows app's page window (WebView2, built into Windows 10 and 11): `civspeak app`.
-app = ["pywebview>=6.2; sys_platform == 'win32'"]
+# The Windows app (`civspeak app`): its page window (WebView2, built into Windows 10 and 11), and its own
+# microphone and speakers (sounddevice, with PortAudio inside).
+app = ["pywebview>=6.2; sys_platform == 'win32'", "sounddevice>=0.5; sys_platform == 'win32'"]
 
 [project.scripts]
 civspeak = "civspeak.cli:main"

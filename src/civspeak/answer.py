@@ -167,9 +167,9 @@ class Answerer:
 
         Raises KeyMissing, spend.CapReached or AnswerError before anything is spent.
         """
+        key = read_key(self.key_path)  # before importing Claude's library (a second or more): no key says so at once
         import anthropic
 
-        key = read_key(self.key_path)
         user = build_user_message(question, hits, spoken)
         reserve = spend.worst_case_usd(estimate_tokens(SYSTEM_PROMPT + user), MAX_TOKENS)
         reservation = self.ledger.reserve(reserve)
