@@ -26,7 +26,7 @@ from civspeak.spend import Ledger
 @pytest.fixture
 def talk_server(built_index, tmp_path):
     out, _ = built_index
-    state = server.State(out, Answerer(Ledger(tmp_path / "spend.jsonl"), tmp_path / "no-key"))
+    state = server.State(out.parent, Answerer(Ledger(tmp_path / "spend.jsonl"), tmp_path / "no-key"))
     state.check = lambda: None
     handler = type("H", (server.Handler,), {"state": state, "talk": server.Talk()})
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)

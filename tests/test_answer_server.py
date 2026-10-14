@@ -133,7 +133,7 @@ def running(built_index, tmp_path, key_file):
     out, _ = built_index
 
     def start(answerer):
-        state = server.State(out, answerer)
+        state = server.State(out.parent, answerer)
         state.check = lambda: None
         handler = type("H", (server.Handler,), {"state": state, "talk": server.Talk()})
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)

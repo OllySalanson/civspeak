@@ -8,9 +8,10 @@ build/
 dist/
 
 # Never commit game data, the built index or secrets.
-# The index lives in ~/.local/share/civspeak and the key in
+# The index lives in ~/.local/share/civspeak (%LOCALAPPDATA%\Civspeak on Windows) and the key in
 # ~/.config/civspeak, but guard against stray copies too.
 *.sqlite
+*.sqlite.part
 *.sqlite3
 *.db
 *.modinfo

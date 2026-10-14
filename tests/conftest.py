@@ -335,6 +335,5 @@ def fake_game(tmp_path: Path) -> GamePaths:
 def built_index(fake_game, tmp_path):
     from civspeak import index
 
-    out = tmp_path / "data" / "index.sqlite"
-    report = index.build(fake_game, out)
-    return out, report
+    report = index.build(fake_game, tmp_path / "data")
+    return report.index, report

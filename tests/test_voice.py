@@ -222,7 +222,7 @@ def voiced(built_index, tmp_path):
         a = Answerer(spend.Ledger(tmp_path / "spend.jsonl"), key_path)
         fake = FakeClient(chunks or ["Put it on Meadow. ", "It gives Science.", "\nUSED: 1"])
         a._client_for = lambda k: fake
-        state = server.State(out, a, voice=FakeVoice(), ears=ears or FakeEars())
+        state = server.State(out.parent, a, voice=FakeVoice(), ears=ears or FakeEars())
         state.check = lambda: None
         handler = type("H", (server.Handler,), {"state": state})
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)

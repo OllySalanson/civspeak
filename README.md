@@ -102,15 +102,22 @@ heard you say is in the question box.
 
 | What | Where |
 |---|---|
-| The built index (your game's text) | `~/.local/share/civspeak/index.sqlite` |
+| The built index (your game's text) | `~/.local/share/civspeak/index-<n>.sqlite` (each rebuild is the next number; old ones are removed) |
 | Spend ledger | `~/.local/share/civspeak/spend.jsonl` |
 | Answer timings | `~/.local/share/civspeak/latency.jsonl` (the last 500 to 1,000 questions) |
 | API key | `~/.config/civspeak/anthropic-key` |
-| Game install | found automatically under `C:\Program Files (x86)\Steam`; override with `CIVSPEAK_GAME_DIR` |
+| Game install | found automatically: every Steam library on any drive (from Steam's `libraryfolders.vdf`), or the Epic Games launcher's install; override with `CIVSPEAK_GAME_DIR` |
 | George's voice (Kokoro model) | `~/.local/share/pixel-explainer/kokoro-v1.0.onnx` and `voices-v1.0.bin`; override with `CIVSPEAK_KOKORO_DIR` |
 | Speech recognition model | `~/.cache/huggingface` (Whisper `base.en`); `CIVSPEAK_WHISPER_MODEL=small.en` tries the bigger one |
-| Game cache and logs | `%LOCALAPPDATA%\Firaxis Games\Sid Meier's Civilization VI`; override with `CIVSPEAK_USER_DIR` |
+| Game cache and logs | `%LOCALAPPDATA%\Firaxis Games\Sid Meier's Civilization VI` (or its `(Epic)` twin, whichever game was loaded last); override with `CIVSPEAK_USER_DIR` |
+| Mods installed by hand | `Documents\My Games\Sid Meier's Civilization VI\Mods`, wherever Windows (or OneDrive) keeps Documents; override with `CIVSPEAK_MODS_DIR` |
 | The Windows helper | `%LOCALAPPDATA%\Civspeak`: the helper, its `config.json`, the page's own Brave profile, `server.log` and `helper.log` |
+
+Running under Windows' own Python instead of WSL (the coming Windows app), Civspeak keeps the index,
+spend ledger, timings and key in `%LOCALAPPDATA%\Civspeak`, and expects George's voice in its
+`models` folder and the speech model in `models\whisper-base.en` (the same environment variables
+override each). The game is found the same way, with Steam's folder read from the registry and
+Documents from Windows itself.
 
 ## How it works
 
@@ -151,8 +158,9 @@ heard you say is in the question box.
   so the first question is as quick as the rest.
 - **Staying light:** Whisper and Kokoro use at most 4 CPU threads each (`CIVSPEAK_THREADS`, 1-8:
   lower it if the game ever stutters while George talks), the server runs at low priority
-  (`nice`), and Kokoro's threads sleep between sentences instead of spinning, which measured a
-  third less CPU per sentence at the same speed. Nothing runs between questions. After 20 minutes
+  (`nice`; below normal priority on Windows), and Kokoro's threads sleep between sentences
+  instead of spinning, which measured a third less CPU per sentence at the same speed. Nothing
+  runs between questions. After 20 minutes
   unused (`CIVSPEAK_IDLE_MINUTES`, 0 = never) both are unloaded, giving back about 650 MB; pressing
   `` ` ``, the microphone or typing a question loads them again while you are still asking, so the
   next answer is only a moment slower. The Windows helper sleeps until the focused window changes

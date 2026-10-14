@@ -1,7 +1,7 @@
 """Short spoken-style answers from Claude, grounded only in the matched Civilopedia entries.
 
-The API key is read only from ~/.config/civspeak/anthropic-key (never from the environment, so
-no other key on this PC can be used by accident) and is never logged or printed.
+The API key is read only from the anthropic-key file in civspeak's config folder (never from the
+environment, so no other key on this PC can be used by accident) and is never logged or printed.
 """
 
 from __future__ import annotations
@@ -52,13 +52,14 @@ class AnswerError(RuntimeError):
 
 
 def read_key(path: Path | None = None) -> str:
-    """Read the personal API key. Tightens the file to mode 600 if it is readable by others."""
+    """Read the personal API key. Tightens the file to mode 600 if it is readable by others (Linux only:
+    Windows reports every file as 666, and the user's own folder already keeps other users out)."""
     path = path or paths.key_file()
     try:
         mode = path.stat().st_mode
     except FileNotFoundError:
         raise KeyMissing(f"No API key yet: {path} does not exist.") from None
-    if mode & (stat.S_IRWXG | stat.S_IRWXO):
+    if mode & (stat.S_IRWXG | stat.S_IRWXO) and os.name != "nt":
         os.chmod(path, 0o600)
     key = path.read_text(encoding="utf-8").strip()
     if not key:
@@ -242,7 +243,7 @@ def _cost(message) -> tuple[float, dict]:
 
 def _friendly_error(e, status) -> str:
     if status == 401:
-        return "The API key was rejected. Check the key in ~/.config/civspeak/anthropic-key."
+        return f"The API key was rejected. Check the key in {paths.key_file()}."
     if status == 403:
         return "The API key is not allowed to use this model."
     if status == 429:
