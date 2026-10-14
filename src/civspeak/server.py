@@ -10,9 +10,14 @@ POST /api/ask            {"question": "...", "speak": true, "spoken": false} -> 
                            problem  why there is no answer (no key, monthly limit, API error)
 GET  /api/speech/ID/N    sentence N of an answer as WAV (waits until George has said it)
 POST /api/listen         a recorded question (audio/wav) -> {"text": "...", "seconds": ...}
-GET  /api/talk           text/event-stream of "talk" events ({"key": "down"} or "up") for the page
+GET  /api/talk           text/event-stream for the page: "talk" events ({"key": "down"} or "up") from the
+                           WSL helper, and in the Windows app everything its own microphone and speakers
+                           do (see conversation.py): mic, level, question, the answer's events, speaking
 POST /api/hotkey         {"key": "down"|"up"} from the Windows helper -> {"listening": true} when a page took it
 POST /api/wake           {} -> starts loading the voice and speech recognizer if they were unloaded while idle
+POST /api/mic            {"key": "down"|"up"|"cancel"} the page's microphone button, in the Windows app
+POST /api/hush           {} -> George stops talking, in the Windows app
+POST /api/voice          {"on": true|false} the page's Voice on/off, for questions asked in the Windows app
 """
 
 from __future__ import annotations
@@ -39,7 +44,7 @@ from pathlib import Path
 from . import index as index_mod
 from . import paths, spend, system
 from .answer import Answerer, AnswerError, KeyMissing
-from .hearing import BadAudio, Ears
+from .hearing import BadAudio, Ears, Heard
 from .idle import IdleUnloader
 from .latency import LatencyLog
 from .search import Index
@@ -59,6 +64,7 @@ MAX_RECORDING = 4_000_000  # bytes: about two minutes of 16 kHz WAV; the page st
 STALE_CHECK_SECONDS = 10
 TALK_PING_SECONDS = 20  # a comment line this often lets a closed page's connection be noticed
 TALK_KEYS = ("down", "up")
+MIC_KEYS = ("down", "up", "cancel")
 LISTEN_PAIRS_SECONDS = 30  # a spoken question is asked this soon after it was heard
 SPEECH_URL = re.compile(r"^/api/speech/([A-Za-z0-9_-]{6,32})/(\d{1,3})$")
 
@@ -208,6 +214,18 @@ class State:
         finally:
             self._waking.release()
 
+    def hear(self, audio: bytes) -> Heard:
+        """What was said in a recorded question (a WAV), noting how long it took for the latency log."""
+        started, cold = time.monotonic(), not self.ears.loaded
+        heard = self.ears.transcribe(audio, self.index)
+        self.last_listen = {
+            "at": time.monotonic(),
+            "listen_s": round(time.monotonic() - started, 2),
+            "audio_s": heard.audio_seconds,
+            "ears_cold": cold,
+        }
+        return heard
+
     def _warm_ears(self) -> None:
         try:
             self.ears.warm_up(self.index)
@@ -216,10 +234,9 @@ class State:
 
 
 class Talk:
-    """Hold-to-talk presses from the Windows helper, passed to the page that opened most recently.
-
-    Only one page listens, so a second open page never records (and pays for) the same question.
-    """
+    """The open pages' event streams. Hold-to-talk presses from the WSL helper go to the page that
+    opened most recently only, so a second open page never records (and pays for) the same question;
+    what the Windows app's own microphone and speakers do goes to every page."""
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -241,10 +258,16 @@ class Talk:
             while self.pages:
                 q, conn = self.pages[-1]
                 if not _closed(conn):
-                    q.put(key)
+                    q.put(("talk", {"key": key}))
                     return True
                 self.pages.pop()
         return False
+
+    def broadcast(self, event: str, data) -> None:
+        """Tell every open page (a page that has gone is dropped when its stream next writes)."""
+        with self.lock:
+            for q, _ in self.pages:
+                q.put((event, data))
 
 
 def _closed(conn: socket.socket) -> bool:
@@ -260,6 +283,7 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "civspeak"
     state: State  # set by make_server()
     talk: Talk  # set by make_server()
+    conversation = None  # the Windows app's own microphone and speakers (conversation.Conversation), set by make_server()
 
     def log_message(self, fmt, *args):  # keep the terminal quiet; never logs bodies
         log.info("%s %s", self.address_string(), fmt % args)
@@ -283,13 +307,20 @@ class Handler(BaseHTTPRequestHandler):
             body = resources.files("civspeak").joinpath("web", name).read_bytes()
             self._send(HTTPStatus.OK, body, ctype)
         elif path == "/api/status":
-            self._json(HTTPStatus.OK, self.state.status())
+            self._json(HTTPStatus.OK, self._status())
         elif path == "/api/talk":
             self._talk_stream()
         elif m := SPEECH_URL.match(path):
             self._speech(m.group(1), int(m.group(2)))
         else:
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+
+    def _status(self) -> dict:
+        status = self.state.status()
+        status["native"] = self.conversation is not None
+        if self.conversation is not None:
+            status["mic"]["problem"] = self.conversation.problem()
+        return status
 
     def _speech(self, answer_id: str, n: int) -> None:
         clip = self.state.narrator.clip(answer_id, n)
@@ -308,7 +339,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send(HTTPStatus.OK, wav, "audio/wav")
 
     def _talk_stream(self) -> None:
-        """The page listens here for the ` key held in a game (see the Windows helper)."""
+        """The page listens here for the ` key held in a game (see the Windows helper), and in the Windows
+        app for its microphone, its answers to spoken questions and George speaking."""
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
@@ -319,11 +351,11 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
             while True:
                 try:
-                    key = q.get(timeout=TALK_PING_SECONDS)
+                    event, data = q.get(timeout=TALK_PING_SECONDS)
                 except queue.Empty:
                     self.wfile.write(b": ping\n\n")
                 else:
-                    self.wfile.write(f"event: talk\ndata: {json.dumps({'key': key})}\n\n".encode())
+                    self.wfile.write(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode())
                 self.wfile.flush()
         except OSError:
             pass  # the page closed or reloaded
@@ -336,7 +368,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/listen":
             self._listen(speak="speak=1" in self.path)
             return
-        if path not in ("/api/ask", "/api/hotkey", "/api/wake"):
+        if path not in ("/api/ask", "/api/hotkey", "/api/wake", "/api/mic", "/api/hush", "/api/voice"):
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         # Only accept requests from our own page and helper (blocks other websites posting to localhost).
@@ -349,6 +381,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/wake":
             self.state.wake()
             self._json(HTTPStatus.OK, {"ok": True})
+            return
+        if path in ("/api/mic", "/api/hush", "/api/voice"):
+            self._native(path)
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -370,7 +405,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         speaker = self._speaker(speak)
         try:
-            self._answer(question, speaker, spoken)
+            Answering(self.state, self._event).run(question, speaker, spoken)
         except (BrokenPipeError, ConnectionResetError):
             if speaker:
                 speaker.cancel()
@@ -388,8 +423,37 @@ class Handler(BaseHTTPRequestHandler):
             self.state.wake()
         self._json(HTTPStatus.OK, {"listening": self.talk.press(key)})
 
+    def _native(self, path: str) -> None:
+        """The page's microphone button, Esc and Voice on/off, for the Windows app's own microphone and speakers."""
+        conversation = self.conversation
+        if conversation is None:
+            self._json(HTTPStatus.NOT_FOUND, {"error": "this Civspeak records and plays in the page"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(min(length, 1000)) or b"{}")
+            if not isinstance(payload, dict):
+                raise ValueError
+        except (ValueError, json.JSONDecodeError):
+            self._json(HTTPStatus.BAD_REQUEST, {"error": "bad request"})
+            return
+        if path == "/api/hush":
+            conversation.hush()
+        elif path == "/api/voice":
+            conversation.speak = bool(payload.get("on", True))
+        else:
+            key = payload.get("key")
+            if key not in MIC_KEYS:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": 'expected {"key": "down"}, "up" or "cancel"'})
+                return
+            conversation.press(key)
+        self._json(HTTPStatus.OK, {"ok": True})
+
     def _speaker(self, speak: bool) -> Speaker | None:
-        """Someone to voice this answer, if the page wants it spoken and George is available."""
+        """Someone to voice this answer, if the page wants it spoken and George is available. In the
+        Windows app he speaks here, and an answer to a spoken question still going goes quiet."""
+        if self.conversation is not None:
+            return self.conversation.typed(self._event, speak)
         if not speak or self.state.voice.problem():
             return None
         return Speaker(self.state.narrator, self._event)
@@ -407,25 +471,17 @@ class Handler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "recording missing or too long"})
             return
         audio = self.rfile.read(length)
-        ears = self.state.ears
-        if ears.problem():
-            self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": ears.problem()})
+        if self.state.ears.problem():
+            self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": self.state.ears.problem()})
             return
-        started, cold = time.monotonic(), not ears.loaded
         try:
-            heard = ears.transcribe(audio, self.state.index)
+            heard = self.state.hear(audio)
         except BadAudio as e:
             self._json(HTTPStatus.BAD_REQUEST, {"error": str(e)})
             return
         except RuntimeError as e:  # the model could not be loaded
             self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(e)})
             return
-        self.state.last_listen = {
-            "at": time.monotonic(),
-            "listen_s": round(time.monotonic() - started, 2),
-            "audio_s": heard.audio_seconds,
-            "ears_cold": cold,
-        }
         reply = {"text": heard.text, "seconds": heard.seconds, "audio_seconds": heard.audio_seconds}
         if not heard.text and speak and not self.state.voice.problem():
             narrator = self.state.narrator
@@ -438,12 +494,22 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(f"event: {name}\ndata: {json.dumps(data)}\n\n".encode())
         self.wfile.flush()
 
+
+class Answering:
+    """Answers one question: the matched entries, Claude's answer as it streams and George reading it
+    out, each told to event(name, data): the asking page's answer stream, or every open page for a
+    question asked out loud in the Windows app."""
+
+    def __init__(self, state: State, event):
+        self.state = state
+        self._event = event
+
     def _problem(self, kind: str, message: str, speaker: Speaker | None) -> None:
         self._event("problem", {"kind": kind, "message": message})
         if speaker:
             speaker.say(SPOKEN_PROBLEMS[kind])
 
-    def _answer(self, question: str, speaker: Speaker | None, spoken: bool) -> None:
+    def run(self, question: str, speaker: Speaker | None, spoken: bool) -> None:
         timing = {"spoken": spoken, "voice_cold": bool(speaker) and not self.state.voice.loaded}
         listened = self.state.last_listen
         if spoken and listened and time.monotonic() - listened["at"] < LISTEN_PAIRS_SECONDS:
@@ -523,22 +589,29 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class Speaker:
-    """Voices one answer: cuts the streamed text into sentences and tells the page where each is."""
+    """Voices one answer: cuts the streamed text into sentences and tells the page where each is. In the
+    Windows app `speakers` (audio.Speakers) also plays each sentence here, as soon as it is voiced."""
 
-    def __init__(self, narrator: Narrator, event):
+    def __init__(self, narrator: Narrator, event, speakers=None):
         self.narrator = narrator
         self.event = event
         self.answer_id = secrets.token_urlsafe(9)
         self.splitter = SentenceSplitter()
         self.first_ready: float | None = None  # when George's first sentence was ready to play
+        self.cancelled = False
         narrator.start(self.answer_id)
+        self.speakers = speakers
+        self.turn = speakers.begin() if speakers else 0
 
     def say(self, sentence: str) -> None:
+        if self.cancelled:
+            return
         n = self.narrator.say(self.answer_id, sentence)
-        if n == 0:
-            clip = self.narrator.clip(self.answer_id, 0)
-            if clip is not None:
-                clip.add_done_callback(lambda f: setattr(self, "first_ready", time.monotonic()))
+        clip = self.narrator.clip(self.answer_id, n)
+        if n == 0 and clip is not None:
+            clip.add_done_callback(lambda f: setattr(self, "first_ready", time.monotonic()))
+        if self.speakers and clip is not None:
+            self.speakers.play(clip, self.turn)
         self.event("say", {"url": f"/api/speech/{self.answer_id}/{n}", "text": sentence})
 
     def first_voice_seconds(self, since: float, wait: float = 30) -> float | None:
@@ -561,17 +634,20 @@ class Speaker:
             self.say(sentence)
 
     def cancel(self) -> None:
+        """Say nothing more of this answer."""
+        self.cancelled = True
         self.narrator.cancel(self.answer_id)
 
 
 class Server(ThreadingHTTPServer):
-    """The answer page's server; .state and .talk are what its requests share."""
+    """The answer page's server; .state, .talk and .conversation are what its requests share."""
 
     daemon_threads = True
     # On Windows SO_REUSEADDR would let a second server take a port that is already in use.
     allow_reuse_address = not system.IS_WINDOWS
     state: State
     talk: Talk
+    conversation = None
 
     def server_bind(self) -> None:
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows: and no other program can take ours
@@ -579,22 +655,29 @@ class Server(ThreadingHTTPServer):
         super().server_bind()
 
 
-def make_server(port: int = 8765, host: str = "127.0.0.1", any_port: bool = False) -> Server:
+def make_server(port: int = 8765, host: str = "127.0.0.1", any_port: bool = False, native: bool = False) -> Server:
     """The server, listening (not yet serving) with the index checked and the voice warming up.
 
     any_port: if `port` is taken, listen on a free one instead (the Windows app opens its own page,
     so it does not mind which); otherwise the OSError is raised.
+    native: record and play George on this PC's own microphone and speakers (the Windows app), not
+    in the page.
     """
     state = State(paths.data_dir(), Answerer())
     talk = Talk()
-    handler = type("PageHandler", (Handler,), {"state": state, "talk": talk})
+    conversation = None
+    if native:
+        from .conversation import Conversation
+
+        conversation = Conversation(state, talk)
+    handler = type("PageHandler", (Handler,), {"state": state, "talk": talk, "conversation": conversation})
     try:
         httpd = Server((host, port), handler)
     except OSError:
         if not any_port:
             raise
         httpd = Server((host, 0), handler)
-    httpd.state, httpd.talk = state, talk
+    httpd.state, httpd.talk, httpd.conversation = state, talk, conversation
     state.check()
     state.warm_up()
     return httpd

@@ -101,6 +101,14 @@ py -m venv %LOCALAPPDATA%\Civspeak\venv
 
 - The star appears by the clock and the answer page opens filling your second screen (never over
   the game: if Civ has the focus it waits until you leave it). Hold `` ` `` in Civ to ask, as above.
+- **The app listens and speaks by itself.** It records your question from the PC's own microphone
+  and George answers out of its speakers, so holding `` ` `` in the game works with the window
+  closed or on a PC with one screen. The page shows what it heard and the answer whenever it is
+  open, and its microphone button, `` ` ``, Esc and **Voice on / Voice off** work the same
+  microphone and speakers. Nothing asks for permission to use the microphone; if Windows has
+  desktop apps' microphone access turned off, the page says where to turn it on.
+- **No microphone?** `` ` `` in the game gives a Windows "ding" and the page, when you next open it,
+  says none was found. Plug one in and ask again: no restart needed.
 - **Closing the window only hides it.** Holding `` ` `` in the game still works and George still
   answers. Click the star and choose **Open the answer page**, or start Civspeak again, to bring
   it back.
@@ -162,7 +170,8 @@ Documents from Windows itself.
 - **Answer:** the top entries go to Claude Opus 5.5 (low effort, prompt caching on the fixed
   instructions, server-side refusal fallback) with instructions to answer only from them.
 - **Listening:** the page records the microphone as 16 kHz audio and sends it to the local server,
-  where Whisper base.en turns it into text on the CPU. Whisper is given a hint list of about 90
+  where Whisper base.en turns it into text on the CPU. (The Windows app records it itself instead,
+  see below.) Whisper is given a hint list of about 90
   names from your own index (civilization-specific districts, buildings and improvements,
   civilizations, leaders, wonders), so it spells "Kongo" and "Mbanza" right.
 - **Speaking:** the answer is cut into sentences as Claude writes it (a long first sentence at its
@@ -182,10 +191,18 @@ Documents from Windows itself.
   fully awake while the game has the focus.
 - **The Windows app** (`src/civspeak/app.py`) is one process: the page's server runs on a thread,
   the star, its menu and `` ` `` (the same code as the helper) on another, and the page in a
-  pywebview window on WebView2, which Windows 10 and 11 already have. The window may play George
-  and use the microphone without a click first, and only the page itself is allowed the
-  microphone. The whole process runs below normal priority, except the thread that takes
-  `` ` ``, so the key is answered at once even while the game keeps the PC busy.
+  pywebview window on WebView2, which Windows 10 and 11 already have. The whole process runs below
+  normal priority, except the thread that takes `` ` ``, so the key is answered at once even while
+  the game keeps the PC busy.
+- **The app's own microphone and speakers** (`src/civspeak/conversation.py` and `audio.py`, through
+  sounddevice, which carries PortAudio): `` ` `` or the page's microphone button opens the default
+  microphone for that one question (at 16 kHz, Whisper's rate, when it allows), with the page's
+  rules for when you have finished (hold and let go, or tap and stop talking). Without the
+  browser's automatic gain, "talking" is anything well above the room's own level, so a quiet
+  microphone still works. Each of George's sentences is written to the speakers as soon as it is
+  voiced, 50 ms at a time, so Esc or a new question stops him at once. Every open page is told
+  what happens on its event stream and shows it; the page itself never records or plays sound,
+  and WebView2 grants it no permission at all.
 - **Quick first answer:** when the server starts it loads Whisper and Kokoro and runs each once
   (the first run is the slowest), and imports Claude's client library (about a second on its own),
   so the first question is as quick as the rest.

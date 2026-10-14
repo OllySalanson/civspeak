@@ -18,6 +18,10 @@ const FACT_LINES = 6; // longer fact lists fold behind "Show N more"
 let current = null; // AbortController of the question in flight
 let speakAnswers = localStorage.getItem("civspeak.speak") !== "off";
 let voiceProblem = "";
+// In the Windows app the server records and plays George itself (so ` works with this window closed):
+// the page then only shows what happens, and its microphone button and Voice on/off drive the server's.
+let native = false;
+let answerText = "";
 
 function show(el, text) {
   el.textContent = text;
@@ -52,6 +56,10 @@ async function refreshStatus() {
     }
     setSpend(s.spent, s.cap);
     voiceProblem = s.voice.problem;
+    if (s.native && !native) {
+      native = true;
+      tellVoice();
+    }
     showVoice();
     micButton.disabled = Boolean(s.mic.problem);
     micButton.title = s.mic.problem || "Ask out loud: click, or hold ` (the key under Esc)";
@@ -141,11 +149,32 @@ function clearAnswer() {
   show(problemEl, "");
   show(answerEl, "");
   entriesEl.replaceChildren();
+  answerText = "";
+}
+
+// An answer's events, from its own stream (a typed question) or the server's (a question asked out loud in the app).
+function showAnswerEvent(event, data) {
+  if (event === "entries") {
+    renderEntries(data);
+    if (!data.length) show(problemEl, "No Civilopedia entries matched that question.");
+  } else if (event === "delta") {
+    answerText += data;
+    show(statusEl, "");
+    show(answerEl, answerText);
+  } else if (event === "done") {
+    show(statusEl, "");
+    show(answerEl, data.text);
+    markUsed(data.used);
+    setSpend(data.spent, data.cap);
+  } else if (event === "problem") {
+    show(statusEl, "");
+    show(problemEl, data.message);
+  }
 }
 
 async function ask(question, spoken = false) {
   if (current) current.abort();
-  stopSpeaking();
+  stopSpeaking({ tell: false }); // in the app, the server stops George itself when the question arrives
   const controller = new AbortController();
   current = controller;
   clearAnswer();
@@ -153,7 +182,6 @@ async function ask(question, spoken = false) {
   button.disabled = true;
   const speak = speakAnswers && !voiceProblem;
 
-  let answer = "";
   try {
     const res = await fetch("/api/ask", {
       method: "POST",
@@ -175,23 +203,10 @@ async function ask(question, spoken = false) {
         buffer = buffer.slice(cut + 2);
         const event = /^event: (.*)$/m.exec(raw)?.[1];
         const data = JSON.parse(/^data: (.*)$/m.exec(raw)?.[1] ?? "null");
-        if (event === "entries") {
-          renderEntries(data);
-          if (!data.length) show(problemEl, "No Civilopedia entries matched that question.");
-        } else if (event === "delta") {
-          answer += data;
-          show(statusEl, "");
-          show(answerEl, answer);
-        } else if (event === "say") {
-          if (current === controller) queueSpeech(data.url);
-        } else if (event === "done") {
-          show(statusEl, "");
-          show(answerEl, data.text);
-          markUsed(data.used);
-          setSpend(data.spent, data.cap);
-        } else if (event === "problem") {
-          show(statusEl, "");
-          show(problemEl, data.message);
+        if (event === "say") {
+          if (current === controller && !native) queueSpeech(data.url); // in the app, the server plays it
+        } else {
+          showAnswerEvent(event, data);
         }
       }
     }
@@ -254,7 +269,8 @@ async function playQueue(generation) {
   }
 }
 
-function stopSpeaking() {
+function stopSpeaking({ tell = true } = {}) {
+  if (native && tell) post("/api/hush", {});
   player.generation += 1;
   player.queue = [];
   player.running = false;
@@ -280,9 +296,15 @@ function showVoice() {
   voiceButton.disabled = Boolean(voiceProblem);
 }
 
+function tellVoice() {
+  // The app's server reads answers to questions asked out loud with this page closed too: it needs to know.
+  if (native) post("/api/voice", { on: speakAnswers });
+}
+
 voiceButton.addEventListener("click", () => {
   speakAnswers = !speakAnswers;
   localStorage.setItem("civspeak.speak", speakAnswers ? "on" : "off");
+  tellVoice();
   if (!speakAnswers) stopSpeaking();
   showVoice();
 });
@@ -308,7 +330,12 @@ let lastWake = 0;
 function wake() {
   if (performance.now() - lastWake < 20000) return;
   lastWake = performance.now();
-  fetch("/api/wake", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
+  post("/api/wake", {});
+}
+
+function post(path, body) {
+  return fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+    .catch(() => {});
 }
 
 function setMic(state) {
@@ -466,14 +493,17 @@ function wav(chunks, rate) {
 }
 
 // Pressing and letting go of the mic button, the ` key, or ` held in a game (through the Windows
-// helper) all work the same way: hold to talk, or tap to talk until you stop.
+// helper) all work the same way: hold to talk, or tap to talk until you stop. In the app the server
+// keeps these same rules for its own microphone.
 function pressTalk() {
+  if (native) return void post("/api/mic", { key: "down" });
   rec.pressedAt = performance.now();
   if (rec.state === "listening" && rec.mode === "toggle") finishListening();
   else if (rec.state === "idle") startListening("hold");
 }
 
 function releaseTalk() {
+  if (native) return void post("/api/mic", { key: "up" });
   if (rec.mode !== "hold" || (rec.state !== "listening" && rec.state !== "starting")) return;
   if (performance.now() - rec.pressedAt < HOLD_MS) rec.mode = "toggle"; // a tap: keep listening
   else finishListening();
@@ -490,7 +520,11 @@ micButton.addEventListener("keydown", (ev) => {
   // Enter or Space on the focused button behaves like a click.
   if ((ev.key === "Enter" || ev.key === " ") && !ev.repeat) {
     ev.preventDefault();
-    if (rec.state === "listening") finishListening();
+    if (native) {
+      // A tap: start listening until the talking stops, or stop listening now.
+      const listening = rec.state === "listening";
+      post("/api/mic", { key: "down" }).then(() => listening || post("/api/mic", { key: "up" }));
+    } else if (rec.state === "listening") finishListening();
     else startListening("toggle");
   }
 });
@@ -512,16 +546,17 @@ for (const b of document.querySelectorAll(".try")) {
   });
 }
 
-document.addEventListener("pointerdown", audioContext, { capture: true });
+document.addEventListener("pointerdown", () => native || audioContext(), { capture: true });
 
 document.addEventListener("keydown", (ev) => {
-  audioContext();
+  if (!native) audioContext();
   if (ev.code === "Backquote" && !ev.ctrlKey && !ev.altKey && !ev.metaKey) {
     // Hold ` to talk (tap it to talk until you stop); it never types into the box.
     ev.preventDefault();
     if (!ev.repeat) pressTalk();
   } else if (ev.key === "Escape") {
-    if (rec.state === "listening" || rec.state === "starting") cancelListening();
+    if (native && rec.state === "listening") post("/api/mic", { key: "cancel" });
+    else if (rec.state === "listening" || rec.state === "starting") cancelListening();
     else stopSpeaking();
   } else if (ev.key === "/" && document.activeElement !== input) {
     ev.preventDefault();
@@ -537,11 +572,50 @@ document.addEventListener("keyup", (ev) => {
 });
 
 // ` held while a game has the focus: the Windows helper tells the server, the server tells us.
-new EventSource("/api/talk").addEventListener("talk", (ev) => {
+const events = new EventSource("/api/talk");
+events.addEventListener("talk", (ev) => {
   const { key } = JSON.parse(ev.data);
   if (key === "down") pressTalk();
   else releaseTalk();
 });
+
+// In the app: the server's own microphone, its answers to spoken questions and George speaking.
+const WORKING = "Working out what you said...";
+const on = (name, handle) => events.addEventListener(name, (ev) => handle(JSON.parse(ev.data)));
+
+on("mic", ({ state, mode }) => {
+  if (micButton.disabled) refreshStatus(); // a microphone plugged in since the page said there was none
+  const was = rec.state;
+  rec.mode = mode;
+  setMic(state);
+  if (state === "listening") {
+    if (was !== "listening") {
+      if (current) current.abort();
+      stopSpeaking({ tell: false });
+      welcomeEl.hidden = true;
+      show(problemEl, "");
+    }
+    showListening();
+  } else if (state === "working") {
+    clearAnswer();
+    input.value = "";
+    show(statusEl, WORKING);
+  } else {
+    micButton.style.setProperty("--level", "0");
+    if (was === "listening" || statusEl.textContent === WORKING) show(statusEl, "");
+  }
+});
+on("level", ({ level }) => micButton.style.setProperty("--level", level.toFixed(3)));
+on("question", ({ text }) => {
+  if (current) current.abort();
+  current = null;
+  button.disabled = false;
+  clearAnswer();
+  input.value = text;
+  show(statusEl, "Thinking...");
+});
+for (const name of ["entries", "delta", "done", "problem"]) on(name, (data) => showAnswerEvent(name, data));
+on("speaking", ({ on: speaking }) => setSpeaking(speaking));
 
 showVoice();
 

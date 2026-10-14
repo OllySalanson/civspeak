@@ -6,10 +6,14 @@ One process holds everything the WSL route spreads over three:
   rest of the process, so the game stays smooth;
 - the icon by the clock, its menu and the ` key taken while Civ VI has the focus: winhelper's Helper
   on its own thread, which sleeps in GetMessage between key presses;
+- the microphone and the speakers (conversation.py, through sounddevice): holding ` in the game
+  records the question here and George answers out of the speakers, so the page's window need not
+  be open at all;
 - the page itself in its own window (pywebview on WebView2, which Windows 10 and 11 already have),
-  on the main thread as WinForms requires. Closing the window only hides it: the page keeps
-  listening for ` and George keeps talking, and the tray menu or the Civspeak shortcut shows it
-  again. "Turn off Civspeak" in the tray menu stops it all.
+  on the main thread as WinForms requires. It shows what was heard and the answer, and its
+  microphone button and Voice on/off work this process's microphone and speakers. Closing the
+  window only hides it; the tray menu or the Civspeak shortcut shows it again. "Turn off Civspeak"
+  in the tray menu stops it all.
 
 Only one Civspeak runs per Windows session (the same lock as the WSL helper, which also wants ` and
 the port): starting a second one brings the running one's page to the front instead. "Start when I
@@ -26,7 +30,6 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from . import paths, server, system, winhelper
 
@@ -39,15 +42,9 @@ PAGE_BACKGROUND = "#0d1626"  # the page's own background (style.css --bg), so th
 # The title bar in the page's header colours (style.css .top and --text) with light caption buttons:
 # DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_CAPTION_COLOR and DWMWA_TEXT_COLOR (colours are 0x00BBGGRR).
 TITLE_BAR = ((20, 1), (35, 0x0022130B), (36, 0x00F8F2EE))
-# WebView2's browser switches: George may speak and the page may listen when ` is held in the game,
-# without a click on the page first, and the page stays fully awake while the game covers or hides it.
-BROWSER_ARGUMENTS = (
-    "--disable-features=ElasticOverscroll",  # pywebview's own switch, which this setting replaces
-    "--autoplay-policy=no-user-gesture-required",
-    "--disable-background-timer-throttling",
-    "--disable-renderer-backgrounding",
-    "--disable-backgrounding-occluded-windows",
-)
+# WebView2's browser switches: pywebview's own, which this setting replaces. The page neither records
+# nor plays sound itself (this process does), so it needs no other switch and may rest while hidden.
+BROWSER_ARGUMENTS = ("--disable-features=ElasticOverscroll",)
 CLOSE_REASON_USER = 3  # WinForms CloseReason.UserClosing: the window's X, Alt+F4 or the taskbar's Close
 SWP_NOZORDER, SWP_NOACTIVATE = 0x0004, 0x0010
 THREAD_PRIORITY_HIGHEST = 2
@@ -59,12 +56,6 @@ def app_command() -> list[str]:
     if getattr(sys, "frozen", False):
         return [sys.executable]
     return [str(Path(sys.executable).with_name("pythonw.exe")), "-m", "civspeak", "app"]
-
-
-def same_origin(uri: str, page_url: str) -> bool:
-    """Whether `uri` is on the page's own server (only the page may use the microphone)."""
-    a, b = urlsplit(uri), urlsplit(page_url)
-    return (a.scheme, a.hostname, a.port) == (b.scheme, b.hostname, b.port)
 
 
 class App(winhelper.Helper):
@@ -90,9 +81,8 @@ class App(winhelper.Helper):
         return subprocess.list2cmdline(app_command())
 
     def press(self, key: str) -> bool:
-        if key == "down":
-            self.httpd.state.wake()  # load George and Whisper again while the player is still asking
-        return self.httpd.talk.press(key)
+        # Recorded and answered in this process, page or no page; False (a beep) when there is no microphone.
+        return self.httpd.conversation.press(key)
 
     # -- the server ----------------------------------------------------------------------------
 
@@ -148,13 +138,10 @@ class App(winhelper.Helper):
             webview.CoreWebView2.PermissionRequested += self._on_permission
 
     def _on_permission(self, core, args) -> None:
-        # The page asks for the microphone; nothing else, and no other page, is granted anything.
-        from Microsoft.Web.WebView2.Core import CoreWebView2PermissionKind, CoreWebView2PermissionState
+        # The page needs no permission (this process has the microphone), so nothing is granted and nobody is asked.
+        from Microsoft.Web.WebView2.Core import CoreWebView2PermissionState
 
-        if args.PermissionKind == CoreWebView2PermissionKind.Microphone and same_origin(args.Uri, self.url):
-            args.State = CoreWebView2PermissionState.Allow
-        else:
-            args.State = CoreWebView2PermissionState.Deny
+        args.State = CoreWebView2PermissionState.Deny
 
     def page_open(self) -> bool:
         return self.shown
@@ -231,7 +218,7 @@ def run(port: int = 8765) -> int:
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(winhelper.NAME)
     system.lower_priority()
 
-    httpd = server.make_server(port, any_port=True)
+    httpd = server.make_server(port, any_port=True, native=True)
     app = App(httpd, folder)
     webview = _webview()
     if webview is not None:
