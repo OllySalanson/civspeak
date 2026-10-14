@@ -83,7 +83,7 @@ heard you say is in the question box.
 .venv/bin/civspeak ask "where can I build a campus"      # the matching entries, no API key needed
 .venv/bin/civspeak ask --full "what does a ziggurat do"
 .venv/bin/civspeak serve --open    # the page without the helper (opens in your usual Brave); Ctrl+C stops it
-.venv/bin/civspeak status          # the game it was built from, whether the API key is present, this month's spend
+.venv/bin/civspeak status          # the game it was built from, the API key, this month's spend, how quick answers are
 .venv/bin/civspeak helper status   # whether the Windows helper is running and starts at login
 ```
 
@@ -104,6 +104,7 @@ heard you say is in the question box.
 |---|---|
 | The built index (your game's text) | `~/.local/share/civspeak/index.sqlite` |
 | Spend ledger | `~/.local/share/civspeak/spend.jsonl` |
+| Answer timings | `~/.local/share/civspeak/latency.jsonl` (the last 500 to 1,000 questions) |
 | API key | `~/.config/civspeak/anthropic-key` |
 | Game install | found automatically under `C:\Program Files (x86)\Steam`; override with `CIVSPEAK_GAME_DIR` |
 | George's voice (Kokoro model) | `~/.local/share/pixel-explainer/kokoro-v1.0.onnx` and `voices-v1.0.bin`; override with `CIVSPEAK_KOKORO_DIR` |
@@ -115,8 +116,9 @@ heard you say is in the question box.
 
 - **Rules:** `Cache/DebugGameplay.sqlite`, which Civ writes when a game loads, holds the exact rule
   set of that game. Civilopedia pages are built from it the way the in-game Civilopedia does
-  (its page queries, chapters and the stats box of each page type: placement, costs, adjacency,
-  unique-to and so on).
+  (its page queries, chapters and the stats box of every page type: placement, costs, adjacency,
+  unique-to, upgrades, abilities and so on), including the page types the Better Civilopedia mod
+  adds (World Congress, dedications, alliances, unit tables, the adjacency overview).
 - **Text:** `Logs/Modding.log` lists every text file the game loaded for that game, in order,
   including mods. civspeak replays that list (base game, DLC, Steam Workshop and local mods) to
   rebuild the English text, then fills the game's placeholders and strips its markup.
@@ -144,10 +146,21 @@ heard you say is in the question box.
   input (or, if the helper ever crashes, Windows ends it). The page runs in its own Brave profile
   so it may start the microphone and George's voice without a click on the page, and stays
   fully awake while the game has the focus.
-- **Staying light:** Whisper and Kokoro are loaded once when the server starts (about 1 GB of
-  memory together), use at most 4 CPU threads each, and the server runs at low priority (`nice`).
-  Nothing runs between questions. The Windows helper sleeps until the focused window changes or
-  the key is pressed: no CPU while idle (measured 0 ms over 10 s) and about 25 MB of memory.
+- **Quick first answer:** when the server starts it loads Whisper and Kokoro and runs each once
+  (the first run is the slowest), and imports Claude's client library (about a second on its own),
+  so the first question is as quick as the rest.
+- **Staying light:** Whisper and Kokoro use at most 4 CPU threads each (`CIVSPEAK_THREADS`, 1-8:
+  lower it if the game ever stutters while George talks), the server runs at low priority
+  (`nice`), and Kokoro's threads sleep between sentences instead of spinning, which measured a
+  third less CPU per sentence at the same speed. Nothing runs between questions. After 20 minutes
+  unused (`CIVSPEAK_IDLE_MINUTES`, 0 = never) both are unloaded, giving back about 650 MB; pressing
+  `` ` ``, the microphone or typing a question loads them again while you are still asking, so the
+  next answer is only a moment slower. The Windows helper sleeps until the focused window changes
+  or the key is pressed: no CPU while idle (measured 0 ms over 10 s) and about 25 MB of memory.
+- **How long answers take:** every question's timings (listening, search, Claude's first words,
+  George's first sentence, whether a model had to load first) go to
+  `~/.local/share/civspeak/latency.jsonl`: timings only, never what was said. `civspeak status`
+  shows the median time to George's first word over the last 20 questions.
 
 ## Development
 

@@ -15,7 +15,7 @@ def titles(hits):
 
 def test_build_reports_pages_and_mod_text_wins(built_index):
     out, report = built_index
-    assert report.pages == 6  # concept, 3 districts, 1 building, 1 moment
+    assert report.pages == 8  # concept, 5 districts, 1 building, 1 moment
     assert report.unresolved == []
     db = sqlite3.connect(out)
     text = dict(db.execute("SELECT title, text FROM pages"))
@@ -50,6 +50,13 @@ def test_exact_fuzzy_soundalike_and_search_terms(built_index):
     assert titles(idx.search("hansel"))[0] == "Hanzel"  # sounds alike
     assert titles(idx.search("brain barns"))[0] == "Thinkery"  # Civilopedia search term, plural
     assert titles(idx.search("moon gardens"))[0] == "Moon Garden"
+
+
+def test_a_vowel_heard_before_mb_still_finds_the_name(built_index):
+    out, _ = built_index
+    # "Embolar" is how speech recognition might write "Mbolo"; without the leading vowel it is closer to
+    # Mbolo than to Ambrel, a name that really starts with a vowel.
+    assert titles(Index(out).search("what does an embolar do"))[:2] == ["Mbolo", "Ambrel"]
 
 
 def test_a_district_beats_a_moment_with_the_same_name(built_index):

@@ -195,7 +195,7 @@ def test_monthly_limit_is_explained(running, tmp_path, key_file):
 def test_status_and_non_json_posts_are_refused(running, tmp_path, key_file):
     url = running(Answerer(spend.Ledger(tmp_path / "spend.jsonl"), key_file))
     status = json.loads(urllib.request.urlopen(url + "/api/status", timeout=5).read())
-    assert status["pages"] == 6 and status["key"] in (True, False) and status["cap"] == 10.0
+    assert status["pages"] == 8 and status["key"] in (True, False) and status["cap"] == 10.0
     req = urllib.request.Request(
         f"{url}/api/ask", data=b"question=x", headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST"
     )

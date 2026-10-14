@@ -118,7 +118,7 @@ main { max-width: 1240px; margin: 0 auto; padding: 28px 32px 64px; }
   color: var(--gold); background: var(--gold-soft); padding: 2px 8px; border-radius: 999px;
 }
 
-.facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0 0 12px; font-size: 15px; }
+.facts { display: grid; grid-template-columns: fit-content(34%) 1fr; gap: 6px 14px; margin: 0 0 12px; font-size: 15px; }
 
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; }

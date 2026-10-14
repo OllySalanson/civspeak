@@ -422,9 +422,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             timing["outcome"] = self._answer_timed(question, speaker, spoken, timing)
         finally:
+            timing["total_s"] = round(time.monotonic() - received, 2)  # the whole answer written
             if speaker:
                 timing["first_voice_s"] = speaker.first_voice_seconds(since=received)
-            timing["total_s"] = round(time.monotonic() - received, 2)
             self.state.latency.record({k: v for k, v in timing.items() if v is not None})
 
     def _answer_timed(self, question: str, speaker: Speaker | None, spoken: bool, timing: dict) -> str:
