@@ -12,6 +12,9 @@ beside it, and has Windows start it when you log in. It:
 - installs Civspeak shortcuts in the Start menu and on the desktop, which start it (or, when it is
   already running, bring its page to the front), so no terminal is ever needed.
 
+The Windows app (civspeak/app.py) uses the same icon, menu and key handling (the Helper class), with
+the server and the page in its own process instead of WSL and Brave.
+
 How the key is taken: RegisterHotKey. Windows hands that one key press to this program instead of
 the game, and nothing else: unlike a keyboard hook, no other key you type passes through here, so
 the game's input is never slowed. RegisterHotKey reports the press but not the release, so while the
@@ -48,7 +51,6 @@ SERVER_START_SECONDS = 180  # at login WSL itself may still be starting
 PAGE_TITLE = "Civspeak"  # the page's <title>, which is also its app window's title
 STATUS_STARTING = "Civspeak is starting..."
 STATUS_READY = "Civspeak: hold ` in Civ to ask"
-STATUS_STOPPED = "Civspeak stopped (see server.log)"
 
 BRAVE_FLAGS = (
     "--no-first-run",
@@ -178,10 +180,10 @@ def server_alive(api: str, timeout: float = 1.0) -> bool:
 
 
 class Messenger:
-    """Posts key changes to the server in order on its own thread, so the message loop never waits."""
+    """Passes key changes to the server in order on its own thread, so the message loop never waits."""
 
-    def __init__(self, api: str, on_unheard):
-        self.api = api
+    def __init__(self, press, on_unheard):
+        self.press = press  # press(key) -> True when an open page took it
         self.on_unheard = on_unheard  # called (on this thread) when nobody was listening for a press
         self.queue: queue.SimpleQueue = queue.SimpleQueue()
         threading.Thread(target=self._run, name="talk", daemon=True).start()
@@ -192,7 +194,7 @@ class Messenger:
     def _run(self) -> None:
         while True:
             key = self.queue.get()
-            if not post_key(self.api, key) and key == "down":
+            if not self.press(key) and key == "down":
                 self.on_unheard()
 
 
@@ -301,6 +303,7 @@ def _win32():
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     shell32 = ctypes.WinDLL("shell32", use_last_error=True)
     gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+    dwmapi = ctypes.WinDLL("dwmapi")
 
     LRESULT = w.LPARAM
     WNDPROC = ctypes.WINFUNCTYPE(LRESULT, w.HWND, w.UINT, w.WPARAM, w.LPARAM)
@@ -440,6 +443,10 @@ def _win32():
         "UnhookWinEvent": sig(user32.UnhookWinEvent, w.BOOL, w.HANDLE),
         "GetForegroundWindow": sig(user32.GetForegroundWindow, w.HWND),
         "SetForegroundWindow": sig(user32.SetForegroundWindow, w.BOOL, w.HWND),
+        "AllowSetForegroundWindow": sig(user32.AllowSetForegroundWindow, w.BOOL, w.DWORD),
+        "SetWindowPos": sig(
+            user32.SetWindowPos, w.BOOL, w.HWND, w.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, w.UINT
+        ),
         "ShowWindow": sig(user32.ShowWindow, w.BOOL, w.HWND, ctypes.c_int),
         "IsIconic": sig(user32.IsIconic, w.BOOL, w.HWND),
         "IsWindowVisible": sig(user32.IsWindowVisible, w.BOOL, w.HWND),
@@ -467,16 +474,19 @@ def _win32():
         ),
         "CreateBitmap": sig(gdi32.CreateBitmap, w.HBITMAP, ctypes.c_int, ctypes.c_int, w.UINT, w.UINT, w.LPVOID),
         "DeleteObject": sig(gdi32.DeleteObject, w.BOOL, w.HANDLE),
+        "DwmSetWindowAttribute": sig(dwmapi.DwmSetWindowAttribute, ctypes.c_long, w.HWND, w.DWORD, w.LPVOID, w.DWORD),
         "GetModuleHandleW": sig(kernel32.GetModuleHandleW, w.HMODULE, w.LPCWSTR),
         "CreateMutexW": sig(kernel32.CreateMutexW, w.HANDLE, w.LPVOID, w.BOOL, w.LPCWSTR),
         "OpenProcess": sig(kernel32.OpenProcess, w.HANDLE, w.DWORD, w.BOOL, w.DWORD),
         "QueryFullProcessImageNameW": sig(kernel32.QueryFullProcessImageNameW, w.BOOL, w.HANDLE, w.DWORD, w.LPWSTR, P(w.DWORD)),
         "CloseHandle": sig(kernel32.CloseHandle, w.BOOL, w.HANDLE),
+        "GetCurrentThread": sig(kernel32.GetCurrentThread, w.HANDLE),
+        "SetThreadPriority": sig(kernel32.SetThreadPriority, w.BOOL, w.HANDLE, ctypes.c_int),
         "CreateJobObjectW": sig(kernel32.CreateJobObjectW, w.HANDLE, w.LPVOID, w.LPCWSTR),
         "SetInformationJobObject": sig(kernel32.SetInformationJobObject, w.BOOL, w.HANDLE, ctypes.c_int, w.LPVOID, w.DWORD),
         "AssignProcessToJobObject": sig(kernel32.AssignProcessToJobObject, w.BOOL, w.HANDLE, w.HANDLE),
     }
-    try:  # real pixels, so the page can be placed exactly on the second screen
+    try:  # real pixels, so the page can be placed exactly on the second screen (set once, before any window)
         user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # per-monitor aware v2
     except (AttributeError, OSError):
         pass
@@ -496,23 +506,55 @@ def _win32():
 
 
 class Helper:
-    def __init__(self, cfg: Config):
-        self.cfg = cfg
-        self.win = _win32()
+    """The icon by the clock and its menu, and ` taken while the game has the focus.
+
+    Subclasses say how the server runs and how the page is shown: WslHelper below (the server in WSL,
+    the page in Brave) and the Windows app's App (civspeak/app.py: the server and the page in one
+    process). `win` replaces the Windows functions in tests.
+    """
+
+    log_name = "server.log"  # where the server's problems go, named when it stops
+
+    def __init__(self, folder: Path, games: list[str] | None = None, win=None):
+        self.folder = folder
+        self.games = list(games or GAMES)
+        self.win = win or _win32()
         self.status = STATUS_STARTING
-        self.proc: subprocess.Popen | None = None
-        self.owns_server = False
         self.stopping = False
         self.hotkey_on = False
         self.hotkey_failed = False
         self.vk = 0
         self.page_wanted = False  # open the page once the game no longer has the focus
         self.hold = Hold(self._send)
-        self.messenger = Messenger(cfg.api, lambda: self._post(WM_UNHEARD))
-        self.job = self._kill_on_close_job()
+        self.messenger = Messenger(self.press, lambda: self._post(WM_UNHEARD))
         self.icon = None
         self.hwnd = None
         self.taskbar_created = self.win.RegisterWindowMessageW("TaskbarCreated")  # sent when Explorer restarts
+
+    # -- what each kind of helper does its own way ----------------------------------------------
+
+    def run_command(self) -> str:
+        """The command Windows runs at login."""
+        raise NotImplementedError
+
+    def press(self, key: str) -> bool:
+        """Hand "down" or "up" to the server (on the messenger's thread). True when an open page took it."""
+        raise NotImplementedError
+
+    def serve(self) -> None:
+        """Start the server (on its own thread) and post WM_SERVER when it is ready, failed or stopped."""
+        raise NotImplementedError
+
+    def page_open(self) -> bool:
+        raise NotImplementedError
+
+    def open_page(self) -> None:
+        """Bring the page to the front, or open it filling the second screen."""
+        raise NotImplementedError
+
+    def shut_down(self) -> None:
+        """Close the page and stop the server, when Civspeak is turned off."""
+        raise NotImplementedError
 
     # -- the hidden window, the tray icon and the menu ----------------------------------------
 
@@ -528,9 +570,10 @@ class Helper:
         self.icon = self._make_icon()
         self._tray(0)  # NIM_ADD
         self._on_foreground = win.WINEVENTPROC(lambda *args: self._update_hotkey())
-        hook = win.SetWinEventHook(3, 3, None, self._on_foreground, 0, 0, 0x0002)  # EVENT_SYSTEM_FOREGROUND, skip own process
+        # EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT, including this program's own windows (the app's page).
+        hook = win.SetWinEventHook(3, 3, None, self._on_foreground, 0, 0, 0)
         self._update_hotkey()
-        threading.Thread(target=self._run_server, name="server", daemon=True).start()
+        threading.Thread(target=self.serve, name="server", daemon=True).start()
 
         msg = win.w.MSG()
         while win.GetMessageW(win.ctypes.byref(msg), None, 0, 0) > 0:
@@ -620,11 +663,12 @@ class Helper:
 
     def _menu(self) -> None:
         win = self.win
+        command = self.run_command()
         menu = win.CreatePopupMenu()
         win.AppendMenuW(menu, 0x1, 0, self.status)  # MF_GRAYED: a title line saying how things are
         win.AppendMenuW(menu, 0x800, 0, None)  # MF_SEPARATOR
         win.AppendMenuW(menu, 0, MENU_OPEN, "Open the answer page")
-        win.AppendMenuW(menu, 0x8 if starts_at_login() else 0, MENU_STARTUP, "Start when I log in")  # MF_CHECKED
+        win.AppendMenuW(menu, 0x8 if starts_at_login(command) else 0, MENU_STARTUP, "Start when I log in")  # MF_CHECKED
         win.AppendMenuW(menu, 0x800, 0, None)
         win.AppendMenuW(menu, 0, MENU_OFF, "Turn off Civspeak")
         win.SetMenuDefaultItem(menu, MENU_OPEN, 0)
@@ -638,7 +682,7 @@ class Helper:
         if choice == MENU_OPEN:
             self.open_page()
         elif choice == MENU_STARTUP:
-            set_start_at_login(not starts_at_login())
+            set_start_at_login(not starts_at_login(command), command)
         elif choice == MENU_OFF:
             self.turn_off()
 
@@ -657,7 +701,7 @@ class Helper:
         """Take ` while the game has the focus, and give it back when anything else does."""
         try:
             foreground = self.win.GetForegroundWindow()
-            in_game = is_game(self._exe_of(foreground), self.cfg.games)
+            in_game = is_game(self._exe_of(foreground), self.games)
             if in_game and not self.hotkey_on:
                 self.vk = self._talk_vk()
                 # MOD_NOREPEAT: one message per press, however long the key is held.
@@ -691,6 +735,65 @@ class Helper:
         finally:
             win.CloseHandle(process)
 
+    def screens(self) -> list:
+        win = self.win
+        found = []
+
+        def add(monitor, _dc, _rect, _data):
+            info = win.MONITORINFO(cbSize=win.ctypes.sizeof(win.MONITORINFO))
+            if win.GetMonitorInfoW(monitor, win.ctypes.byref(info)):
+                r = info.rcWork
+                found.append(((r.left, r.top, r.right, r.bottom), bool(info.dwFlags & 1)))  # MONITORINFOF_PRIMARY
+            return True
+
+        win.EnumDisplayMonitors(None, None, win.MONITORENUMPROC(add), 0)
+        return found
+
+    # -- the server ----------------------------------------------------------------------------
+
+    def _server_changed(self, what: int) -> None:
+        if self.stopping:
+            return
+        if what == SERVER_READY:
+            self._set_status(STATUS_READY)
+            if not self.page_open():
+                # Never put a window over the game: wait until it no longer has the focus.
+                if self.hotkey_on:
+                    self.page_wanted = True
+                else:
+                    self.open_page()
+        else:
+            message = "Civspeak could not start." if what == SERVER_FAILED else "Civspeak stopped."
+            log = self.folder / self.log_name
+            self._set_status(f"Civspeak stopped (see {self.log_name})", f"{message} What went wrong is in {log}", True)
+
+    # -- turning off -------------------------------------------------------------------------
+
+    def turn_off(self) -> None:
+        self.stopping = True
+        if self.hotkey_on:
+            self.win.UnregisterHotKey(self.hwnd, HOTKEY_ID)
+        self._tray(2)  # NIM_DELETE
+        self.shut_down()
+        self.win.DestroyWindow(self.hwnd)
+
+
+class WslHelper(Helper):
+    """The helper installed from WSL: the server runs in WSL through wsl.exe, the page in Brave."""
+
+    def __init__(self, cfg: Config):
+        super().__init__(cfg.folder, cfg.games)
+        self.cfg = cfg
+        self.proc: subprocess.Popen | None = None
+        self.owns_server = False
+        self.job = self._kill_on_close_job()
+
+    def run_command(self) -> str:
+        return _run_command()
+
+    def press(self, key: str) -> bool:
+        return post_key(self.cfg.api, key)
+
     # -- the page ----------------------------------------------------------------------------
 
     def page_windows(self) -> list:
@@ -713,22 +816,10 @@ class Helper:
         fn(hwnd, buf, len(buf))
         return buf.value
 
-    def screens(self) -> list:
-        win = self.win
-        found = []
-
-        def add(monitor, _dc, _rect, _data):
-            info = win.MONITORINFO(cbSize=win.ctypes.sizeof(win.MONITORINFO))
-            if win.GetMonitorInfoW(monitor, win.ctypes.byref(info)):
-                r = info.rcWork
-                found.append(((r.left, r.top, r.right, r.bottom), bool(info.dwFlags & 1)))  # MONITORINFOF_PRIMARY
-            return True
-
-        win.EnumDisplayMonitors(None, None, win.MONITORENUMPROC(add), 0)
-        return found
+    def page_open(self) -> bool:
+        return bool(self.page_windows())
 
     def open_page(self) -> None:
-        """Bring the page to the front, or open it filling the second screen."""
         windows = self.page_windows()
         if windows:
             if self.win.IsIconic(windows[0]):
@@ -754,7 +845,7 @@ class Helper:
         win.SetInformationJobObject(job, 9, win.ctypes.byref(info), win.ctypes.sizeof(info))
         return job
 
-    def _run_server(self) -> None:
+    def serve(self) -> None:
         try:
             if server_alive(self.cfg.api):  # already running (for example `civspeak serve` in a terminal)
                 self._post(WM_SERVER, SERVER_READY)
@@ -786,69 +877,61 @@ class Helper:
             traceback.print_exc()
             self._post(WM_SERVER, SERVER_FAILED)
 
-    def _server_changed(self, what: int) -> None:
-        if self.stopping:
-            return
-        if what == SERVER_READY:
-            self._set_status(STATUS_READY)
-            if not self.page_windows():
-                # Never put a window over the game: wait until it no longer has the focus.
-                if self.hotkey_on:
-                    self.page_wanted = True
-                else:
-                    self.open_page()
-        else:
-            message = "Civspeak could not start." if what == SERVER_FAILED else "Civspeak stopped."
-            self._set_status(STATUS_STOPPED, f"{message} What went wrong is in {self.cfg.folder / 'server.log'}", True)
-
-    # -- turning off -------------------------------------------------------------------------
-
-    def turn_off(self) -> None:
-        self.stopping = True
-        if self.hotkey_on:
-            self.win.UnregisterHotKey(self.hwnd, HOTKEY_ID)
-        self._tray(2)  # NIM_DELETE
-        if self.owns_server:
-            self.close_page()
-            if self.proc and self.proc.poll() is None:
-                self.proc.stdin.close()  # the server stops when its input closes
-                try:
-                    self.proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    self.proc.kill()
-        self.win.DestroyWindow(self.hwnd)
+    def shut_down(self) -> None:
+        if not self.owns_server:
+            return  # someone else's server (and page): leave them running
+        self.close_page()
+        if self.proc and self.proc.poll() is None:
+            self.proc.stdin.close()  # the server stops when its input closes
+            try:
+                self.proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
 
 
 # -- start at login, install, uninstall ------------------------------------------------------
 
 
-def _run_command() -> str:
-    pythonw = Path(sys.executable).with_name("pythonw.exe")
-    return f'"{pythonw}" "{Path(__file__).resolve()}"'
-
-
-def starts_at_login() -> bool:
+def starts_at_login(command: str, name: str = NAME) -> bool:
+    """Whether Windows runs `command` when you log in."""
     import winreg
 
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
-            winreg.QueryValueEx(key, NAME)
-            return True
+            value, _ = winreg.QueryValueEx(key, name)
     except OSError:
         return False
+    return isinstance(value, str) and value.strip().lower() == command.strip().lower()
 
 
-def set_start_at_login(on: bool) -> None:
+def set_start_at_login(on: bool, command: str, name: str = NAME) -> None:
+    """Have Windows run `command` when you log in (the per-user Run key), or stop it."""
     import winreg
 
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
         if on:
-            winreg.SetValueEx(key, NAME, 0, winreg.REG_SZ, _run_command())
+            winreg.SetValueEx(key, name, 0, winreg.REG_SZ, command)
         else:
             try:
-                winreg.DeleteValue(key, NAME)
+                winreg.DeleteValue(key, name)
             except FileNotFoundError:
                 pass
+
+
+def claim_single_instance(mutex: str = MUTEX_NAME) -> bool:
+    """True when no other Civspeak (helper or app) is running in this Windows session. Otherwise False,
+    after asking the running one to bring its page to the front."""
+    win = _win32()
+    win.CreateMutexW(None, False, mutex)  # never closed: held for as long as this process runs
+    if win.ctypes.get_last_error() != 183:  # ERROR_ALREADY_EXISTS
+        return True
+    hwnd = win.FindWindowW(WINDOW_CLASS, None)
+    if hwnd:
+        pid = win.w.DWORD()
+        win.GetWindowThreadProcessId(hwnd, win.ctypes.byref(pid))
+        win.AllowSetForegroundWindow(pid.value)  # the player just started us, so the page may come to the front
+        win.PostMessageW(hwnd, WM_OPEN_PAGE, 0, 0)
+    return False
 
 
 def _running_helper():
@@ -890,10 +973,15 @@ def set_shortcuts(on: bool) -> None:
     subprocess.run(command, env=env, check=True, capture_output=True, creationflags=0x08000000)
 
 
+def _run_command() -> str:
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    return f'"{pythonw}" "{Path(__file__).resolve()}"'
+
+
 def install() -> int:
     """Shortcuts, start at every login, and start now (or, if it is already running, show the page)."""
     set_shortcuts(True)
-    set_start_at_login(True)
+    set_start_at_login(True, _run_command())
     pythonw = Path(sys.executable).with_name("pythonw.exe")
     flags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
     try:  # outlive whatever started the installer (WSL puts Windows programs it starts in a job)
@@ -918,7 +1006,7 @@ def stop() -> int:
 def uninstall() -> int:
     """Remove the shortcuts, no longer start at login, and turn the running helper off."""
     set_shortcuts(False)
-    set_start_at_login(False)
+    set_start_at_login(False, _run_command())
     return stop()
 
 
@@ -928,20 +1016,15 @@ def main(argv: list[str]) -> int:
     if command in ("install", "uninstall", "stop"):
         return {"install": install, "uninstall": uninstall, "stop": stop}[command]()
     if command == "status":
-        print(json.dumps({"running": bool(_running_helper()), "at_login": starts_at_login()}))
+        print(json.dumps({"running": bool(_running_helper()), "at_login": starts_at_login(_run_command())}))
         return 0
 
-    win = _win32()
-    win.CreateMutexW(None, False, MUTEX_NAME)
-    if win.ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS: it is running; show its page instead
-        hwnd = win.FindWindowW(WINDOW_CLASS, None)
-        if hwnd:
-            win.PostMessageW(hwnd, WM_OPEN_PAGE, 0, 0)
-        return 0
+    if not claim_single_instance():
+        return 0  # it is running: its page was brought to the front instead
     # pythonw has nowhere to print: problems go to helper.log beside this file.
     sys.stdout = sys.stderr = open(folder / "helper.log", "w", buffering=1, encoding="utf-8")
     try:
-        return Helper(load_config(folder)).run()
+        return WslHelper(load_config(folder)).run()
     except Exception:
         traceback.print_exc()
         return 1

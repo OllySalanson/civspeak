@@ -86,6 +86,12 @@ def cmd_serve(args) -> int:
     return serve(port=args.port, open_browser=args.open, watch_stdin=args.watch_stdin)
 
 
+def cmd_app(args) -> int:
+    from . import app
+
+    return app.run(port=args.port)
+
+
 def cmd_helper(args) -> int:
     from . import helper
 
@@ -145,6 +151,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--watch-stdin", action="store_true", help="stop when standard input closes (used by the Windows helper)")
     p.set_defaults(func=cmd_serve)
 
+    p = sub.add_parser("app", help="run Civspeak as a Windows app: the page in its own window, hold ` in Civ to ask")
+    p.add_argument("--port", type=int, default=8765, help="the page's port (default 8765; another one if it is taken)")
+    p.set_defaults(func=cmd_app)
+
     p = sub.add_parser("helper", help="the Windows helper: hold ` in Civ VI to ask (install, uninstall, status)")
     p.add_argument("action", choices=["install", "uninstall", "status"])
     p.add_argument("--port", type=int, default=8765, help="the port the helper starts the page on (default 8765)")
@@ -154,6 +164,8 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_status)
 
     argv = sys.argv[1:] if argv is None else argv
+    if not argv and getattr(sys, "frozen", False):
+        argv = ["app"]  # Civspeak.exe on its own (a shortcut, or the Run key at login) is the app
     if argv[:1] == ["--build"]:
         argv = ["build", *argv[1:]]  # how the packaged app (Civspeak.exe --build) rebuilds the index
     if system.IS_WINDOWS:

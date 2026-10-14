@@ -258,8 +258,8 @@ def _closed(conn: socket.socket) -> bool:
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "civspeak"
-    state: State  # set by serve()
-    talk: Talk  # set by serve()
+    state: State  # set by make_server()
+    talk: Talk  # set by make_server()
 
     def log_message(self, fmt, *args):  # keep the terminal quiet; never logs bodies
         log.info("%s %s", self.address_string(), fmt % args)
@@ -564,18 +564,47 @@ class Speaker:
         self.narrator.cancel(self.answer_id)
 
 
-def serve(port: int = 8765, open_browser: bool = False, host: str = "127.0.0.1", watch_stdin: bool = False) -> int:
-    answerer = Answerer()
-    state = State(paths.data_dir(), answerer)
+class Server(ThreadingHTTPServer):
+    """The answer page's server; .state and .talk are what its requests share."""
+
+    daemon_threads = True
+    # On Windows SO_REUSEADDR would let a second server take a port that is already in use.
+    allow_reuse_address = not system.IS_WINDOWS
+    state: State
+    talk: Talk
+
+    def server_bind(self) -> None:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows: and no other program can take ours
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
+def make_server(port: int = 8765, host: str = "127.0.0.1", any_port: bool = False) -> Server:
+    """The server, listening (not yet serving) with the index checked and the voice warming up.
+
+    any_port: if `port` is taken, listen on a free one instead (the Windows app opens its own page,
+    so it does not mind which); otherwise the OSError is raised.
+    """
+    state = State(paths.data_dir(), Answerer())
+    talk = Talk()
+    handler = type("PageHandler", (Handler,), {"state": state, "talk": talk})
+    try:
+        httpd = Server((host, port), handler)
+    except OSError:
+        if not any_port:
+            raise
+        httpd = Server((host, 0), handler)
+    httpd.state, httpd.talk = state, talk
     state.check()
     state.warm_up()
-    Handler.state = state
-    Handler.talk = Talk()
-    httpd = ThreadingHTTPServer((host, port), Handler)
-    httpd.daemon_threads = True
+    return httpd
+
+
+def serve(port: int = 8765, open_browser: bool = False, host: str = "127.0.0.1", watch_stdin: bool = False) -> int:
+    httpd = make_server(port, host)
     url = f"http://localhost:{port}"
     print(f"Civspeak is running at {url}  (Ctrl+C to stop)", flush=True)
-    if state.building:
+    if httpd.state.building:
         print("Building the Civilopedia index from your game in the background...", flush=True)
     if open_browser:
         open_page(url)

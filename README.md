@@ -87,6 +87,32 @@ heard you say is in the question box.
 .venv/bin/civspeak helper status   # whether the Windows helper is running and starts at login
 ```
 
+### The Windows app (in progress)
+
+The same Civspeak as one Windows program, with no WSL and no Brave: the answer page is its own
+window and everything else runs inside it. The installer (`Civspeak-Setup.exe`) comes later; until
+then it runs from a Python 3.10 or newer for Windows, in a Command Prompt in this folder:
+
+```bat
+py -m venv %LOCALAPPDATA%\Civspeak\venv
+%LOCALAPPDATA%\Civspeak\venv\Scripts\pip install .[voice,app]
+%LOCALAPPDATA%\Civspeak\venv\Scripts\pythonw -m civspeak app
+```
+
+- The star appears by the clock and the answer page opens filling your second screen (never over
+  the game: if Civ has the focus it waits until you leave it). Hold `` ` `` in Civ to ask, as above.
+- **Closing the window only hides it.** Holding `` ` `` in the game still works and George still
+  answers. Click the star and choose **Open the answer page**, or start Civspeak again, to bring
+  it back.
+- **Start when I log in** (in the star's menu) has Windows start the app at login; **Turn off
+  Civspeak** stops it, page and all.
+- Only one Civspeak runs at a time, because both want `` ` `` and the same page: while the WSL
+  helper runs, starting the app just shows the helper's page. Turn the helper off first
+  (`.venv/bin/civspeak helper uninstall` in WSL). Ticking **Start when I log in** in the app
+  replaces the helper at login.
+- It keeps its files in `%LOCALAPPDATA%\Civspeak` and expects George's voice and the speech model in
+  its `models` folder (see "Where things live"); nothing is downloaded.
+
 ### The API key and the spend cap
 
 - The key is read only from `~/.config/civspeak/anthropic-key` (mode 600, outside the repo). Any
@@ -112,6 +138,7 @@ heard you say is in the question box.
 | Game cache and logs | `%LOCALAPPDATA%\Firaxis Games\Sid Meier's Civilization VI` (or its `(Epic)` twin, whichever game was loaded last); override with `CIVSPEAK_USER_DIR` |
 | Mods installed by hand | `Documents\My Games\Sid Meier's Civilization VI\Mods`, wherever Windows (or OneDrive) keeps Documents; override with `CIVSPEAK_MODS_DIR` |
 | The Windows helper | `%LOCALAPPDATA%\Civspeak`: the helper, its `config.json`, the page's own Brave profile, `server.log` and `helper.log` |
+| The Windows app | `%LOCALAPPDATA%\Civspeak`: `app.log` (what went wrong, if anything), the page window's `webview` folder (it remembers Voice on or off) and `civspeak.ico` |
 
 Running under Windows' own Python instead of WSL (the coming Windows app), Civspeak keeps the index,
 spend ledger, timings and key in `%LOCALAPPDATA%\Civspeak`, and expects George's voice in its
@@ -153,6 +180,12 @@ Documents from Windows itself.
   input (or, if the helper ever crashes, Windows ends it). The page runs in its own Brave profile
   so it may start the microphone and George's voice without a click on the page, and stays
   fully awake while the game has the focus.
+- **The Windows app** (`src/civspeak/app.py`) is one process: the page's server runs on a thread,
+  the star, its menu and `` ` `` (the same code as the helper) on another, and the page in a
+  pywebview window on WebView2, which Windows 10 and 11 already have. The window may play George
+  and use the microphone without a click first, and only the page itself is allowed the
+  microphone. The whole process runs below normal priority, except the thread that takes
+  `` ` ``, so the key is answered at once even while the game keeps the PC busy.
 - **Quick first answer:** when the server starts it loads Whisper and Kokoro and runs each once
   (the first run is the slowest), and imports Claude's client library (about a second on its own),
   so the first question is as quick as the rest.
