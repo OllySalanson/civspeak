@@ -19,13 +19,22 @@ _ARG = re.compile(r"^(\d+)(?:_\w*)?$")
 class Localizer:
     def __init__(self, tags: dict[str, str]):
         self.tags = tags
+        self._named: dict = {}
 
     def has(self, tag: str | None) -> bool:
         return bool(tag) and tag in self.tags
 
-    def lookup(self, key, *args) -> str:
-        """Like Locale.Lookup: resolve a tag (or take literal text) and fill its placeholders."""
-        return self._lookup(key, args, 0)
+    def lookup(self, key, *args, named: dict | None = None) -> str:
+        """Like Locale.Lookup: resolve a tag (or take literal text) and fill its placeholders.
+
+        `named` fills placeholders by name, such as {Amount : number #}: the game passes modifier
+        arguments that way (GameEffectsText.lua).
+        """
+        self._named = named or {}
+        try:
+            return self._lookup(key, args, 0)
+        finally:
+            self._named = {}
 
     def _lookup(self, key, args, depth: int) -> str:
         if key is None:
@@ -91,6 +100,8 @@ class Localizer:
             idx = int(m.group(1)) - 1
             if 0 <= idx < len(args):
                 value = args[idx]
+        elif name in self._named:
+            value = self._named[name]
         if value is None:
             if sep and spec.strip().startswith("plural"):
                 # Unknown count: prefer the "other" (plural) wording.
@@ -224,6 +235,8 @@ ICON_WORDS = {
     "loyalty": "Loyalty",
     "co2": "CO2",
     "glory": "Glory",
+    "techboosted": "Eureka",
+    "civicboosted": "Inspiration",
 }
 
 _COLOR = re.compile(r"\[(?:COLOR[_:][^\]]*|ENDCOLOR|SIZE[_:][^\]]*|STYLE[_:][^\]]*|ENDSTYLE|[iIbBuU]|/[iIbBuU])\]")
@@ -264,15 +277,18 @@ def clean(text: str) -> str:
         if word in ("", "• "):
             return word
         following = text[m.end() : m.end() + 40].lower()
-        last = word.split()[-1].lower()
+        first, last = word.split()[0].lower(), word.split()[-1].lower()
         compact = word.replace(" ", "").lower()
         if (
             following.startswith(word.lower())
             or following.startswith(last)
             or following.replace(" ", "").startswith(compact)
+            or following.replace(" ", "").startswith(compact.removesuffix("s"))
             or (last.endswith("s") and following.startswith(last[:-1]))
+            or (len(first) >= 4 and following.startswith(first))  # "[ICON_Ranged] Ranged Strikes"
         ):
-            return ""  # "+2 [ICON_Science] Science" -> "+2 Science"
+            # "+2 [ICON_Science] Science" -> "+2 Science"; "+6[ICON_Amenities]Amenities" -> "+6 Amenities"
+            return " " if m.start() and text[m.start() - 1].isalnum() else ""
         return word + " "
 
     text = _ICON.sub(icon, text)

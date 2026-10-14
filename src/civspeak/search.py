@@ -31,6 +31,8 @@ STOPWORDS = set(
 # Words that are part of many titles but carry little meaning on their own.
 WEAK = {"great", "district", "age", "era", "unit", "the", "of"}
 SECTION_WEIGHT = {"MOMENTS": 0.7}
+# Better Civilopedia's AI pages are titled like eras ("Medieval Era") but only list what the AI favours.
+LAYOUT_WEIGHT = {"TimeStrategy": 0.4}
 PLACEMENT_WORDS = {"where", "build", "built", "place", "placed", "placement", "put", "adjacent", "tile", "next"}
 
 _WORD = re.compile(r"[a-z0-9]+")
@@ -84,6 +86,7 @@ class Index:
         self.db.row_factory = sqlite3.Row
         self.meta = dict((r["key"], r["value"]) for r in self.db.execute("SELECT key, value FROM meta"))
         self.sections = dict(self.db.execute("SELECT id, section_id FROM pages").fetchall())
+        self.layouts = dict(self.db.execute("SELECT id, layout FROM pages").fetchall())
         self.names: list[_Name] = []
         self.by_norm: dict[str, list[_Name]] = defaultdict(list)
         self.by_sound: dict[str, list[_Name]] = defaultdict(list)
@@ -223,6 +226,7 @@ class Index:
         ranked = []
         for page, score in scores.items():
             score *= SECTION_WEIGHT.get(self.sections.get(page, ""), 1.0)
+            score *= LAYOUT_WEIGHT.get(self.layouts.get(page, ""), 1.0)
             if placement and page in self.placeable:
                 score += 0.05  # "where can I build X": X is something with placement rules
             ranked.append((score, page))
@@ -268,13 +272,16 @@ def entry_text(page: dict, budget: int = 3000) -> str:
     """Plain text of a page for the answer prompt: facts first, then chapters, within a budget."""
     head = f"{page['title']} ({page['section']}{' - ' + page['group'] if page['group'] else ''})"
     parts = [head]
+    used = len(head)
+    blocks = []
     for g in page["facts"]:
         body = "; ".join(g["lines"])
-        parts.append(f"{g['heading']}: {body}" if g["heading"] else body)
-    used = sum(len(p) for p in parts)
+        blocks.append(f"{g['heading']}: {body}" if g["heading"] else body)
     for c in page["chapters"]:
         text = "\n".join(c["paragraphs"])
-        block = f"{c['title']}:\n{text}" if c["title"] else text
+        blocks.append(f"{c['title']}:\n{text}" if c["title"] else text)
+    # Facts first, then chapters; a long page (every district's adjacency, say) is cut to fit.
+    for block in blocks:
         room = budget - used
         if room <= 200:
             break

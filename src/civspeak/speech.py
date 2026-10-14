@@ -25,7 +25,6 @@ SPEED = 0.92
 LANG = "en-gb"
 SENTENCE_PAUSE = 0.3  # seconds of quiet after each sentence
 CLAUSE_PAUSE = 0.12
-THREADS = 4  # measured: real-time factor ~0.55 at 4 threads, ~1 at 2
 
 # Words ending in a full stop that do not end a sentence.
 _ABBREVIATIONS = {"e.g", "i.e", "etc", "vs", "approx", "st", "mt", "dr", "mr", "mrs", "ms", "no"}
@@ -100,14 +99,22 @@ def to_wav(samples, rate: int) -> bytes:
     return buf.getvalue()
 
 
-class Voice:
-    """Kokoro, loaded once on first use (or by warm-up) and kept loaded."""
+def _errors_only(record: logging.LogRecord) -> bool:
+    # espeak warns about every clause it splits ("words count mismatch"); it is harmless.
+    # (phonemizer resets its logger's level on each use, so this has to be a filter.)
+    return record.levelno >= logging.ERROR
 
-    def __init__(self, voice: str = VOICE, speed: float = SPEED, threads: int = THREADS):
-        self.voice, self.speed, self.threads = voice, speed, threads
+
+class Voice:
+    """Kokoro, loaded on first use (or by warm-up) and kept until it has been idle a while (see idle.py)."""
+
+    def __init__(self, voice: str = VOICE, speed: float = SPEED, threads: int | None = None):
+        # 4 threads measured: real-time factor ~0.55 (2 threads: ~1, too slow to keep up with speech).
+        self.voice, self.speed, self.threads = voice, speed, threads or paths.cpu_threads()
         self._kokoro = None
         self._lock = threading.Lock()
         self.error = ""
+        self.last_used = time.monotonic()
 
     def problem(self) -> str:
         """Why George cannot speak on this PC, or "" if he can."""
@@ -128,36 +135,52 @@ class Voice:
         return self._kokoro is not None
 
     def load(self) -> None:
-        with self._lock:
-            if self._kokoro is not None:
-                return
-            problem = self.problem()
-            if problem:
-                raise RuntimeError(problem)
-            import onnxruntime as rt
-            from kokoro_onnx import Kokoro
+        self._acquire()
 
-            # espeak warns about every clause it splits ("words count mismatch"); it is harmless.
-            # (phonemizer resets its logger's level on each use, so this has to be a filter.)
-            logging.getLogger("phonemizer").addFilter(lambda record: record.levelno >= logging.ERROR)
-            started = time.monotonic()
-            model, voices = paths.kokoro_files()
-            options = rt.SessionOptions()
-            options.intra_op_num_threads = self.threads
-            options.inter_op_num_threads = 1
-            try:
-                session = rt.InferenceSession(str(model), sess_options=options, providers=["CPUExecutionProvider"])
-                self._kokoro = Kokoro.from_session(session, str(voices))
-            except Exception as e:  # a broken model file must not take the server down
-                self.error = f"The Kokoro voice could not be loaded: {e}"
-                raise RuntimeError(self.error) from e
-            log.info("voice loaded in %.1fs", time.monotonic() - started)
+    def unload(self) -> bool:
+        with self._lock:
+            loaded, self._kokoro = self._kokoro is not None, None
+        return loaded
+
+    def _acquire(self):
+        """The loaded Kokoro (loading it if needed), taken under the lock so an idle unload cannot race it."""
+        with self._lock:
+            self.last_used = time.monotonic()
+            if self._kokoro is None:
+                self._load_locked()
+            return self._kokoro
+
+    def _load_locked(self) -> None:
+        problem = self.problem()
+        if problem:
+            raise RuntimeError(problem)
+        import onnxruntime as rt
+        from kokoro_onnx import Kokoro
+
+        logging.getLogger("phonemizer").addFilter(_errors_only)
+        started = time.monotonic()
+        model, voices = paths.kokoro_files()
+        options = rt.SessionOptions()
+        options.intra_op_num_threads = self.threads
+        options.inter_op_num_threads = 1
+        # onnxruntime's threads otherwise spin for a while after every sentence: measured a third
+        # less CPU per sentence without it, at the same speed, which leaves those cores to the game.
+        options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        options.add_session_config_entry("session.inter_op.allow_spinning", "0")
+        try:
+            session = rt.InferenceSession(str(model), sess_options=options, providers=["CPUExecutionProvider"])
+            self._kokoro = Kokoro.from_session(session, str(voices))
+        except Exception as e:  # a broken model file must not take the server down
+            self.error = f"The Kokoro voice could not be loaded: {e}"
+            raise RuntimeError(self.error) from e
+        log.info("voice loaded in %.1fs", time.monotonic() - started)
 
     def synthesize(self, sentence: str) -> bytes:
         """One sentence as a WAV file."""
-        self.load()
+        kokoro = self._acquire()
         text = speech_text(sentence)
-        samples, rate = self._kokoro.create(text, voice=self.voice, speed=self.speed, lang=LANG)
+        samples, rate = kokoro.create(text, voice=self.voice, speed=self.speed, lang=LANG)
+        self.last_used = time.monotonic()
         # Kokoro trims the silence off each clip; put back the pause that belongs after it.
         import numpy as np
 

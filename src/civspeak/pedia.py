@@ -8,6 +8,7 @@ types is a port of the game's CivilopediaPage_*.lua layouts (Gathering Storm ver
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -137,8 +138,44 @@ class Pedia:
         except (TypeError, ValueError):
             return default
 
+    def modifier_text(self, modifier_id, context: str = "Summary") -> str:
+        """A modifier's own description, filled with its arguments (GameEffectsText.lua's GetModifierText)."""
+        rows = self.q("SELECT Text FROM ModifierStrings WHERE ModifierId = ? AND Context = ?", modifier_id, context)
+        if not rows or not rows[0]["Text"]:
+            return ""
+        named = {
+            a["Name"]: _number_or_text(a["Value"])
+            for a in self.q("SELECT * FROM ModifierArguments WHERE ModifierId = ?", modifier_id)
+        }
+        return clean(self.loc.lookup(rows[0]["Text"], named=named))
+
+    def modifier_args(self, link_table: str, owner_col: str, owner: str, effect: str, arg_name: str) -> list[str]:
+        """Values of one argument of an owner's modifiers that have a given effect (e.g. the buildings a belief adds)."""
+        mod_col = "ModifierID" if link_table == "BeliefModifiers" else "ModifierId"
+        rows = self.q(
+            f"SELECT a.Value FROM {link_table} l JOIN Modifiers m ON m.ModifierId = l.{mod_col} "
+            "JOIN DynamicModifiers d ON d.ModifierType = m.ModifierType "
+            "JOIN ModifierArguments a ON a.ModifierId = m.ModifierId "
+            f"WHERE l.{owner_col} = ? AND d.EffectType = ? AND a.Name = ?",
+            owner,
+            effect,
+            arg_name,
+        )
+        return [r["Value"] for r in rows]
+
     def yield_row(self, yield_type: str):
         return self.get("Yields", "YieldType", yield_type)
+
+    def type_name(self, type_id: str) -> str:
+        """The name the player sees for a game type such as YIELD_SCIENCE or DISTRICT_CAMPUS."""
+        for table, col in _NAMED_TYPES:
+            name = self.name(table, col, type_id)
+            if name:
+                return name
+        words = type_id.split("_")
+        if len(words) > 1 and words[0] in ("PSEUDOYIELD", "YIELD", "TECH", "CIVIC", "BUILDING", "DISTRICT", "UNIT"):
+            words = words[1:]
+        return " ".join(w.capitalize() for w in words)
 
     # -- pages -----------------------------------------------------------------------------
 
@@ -225,7 +262,8 @@ class Pedia:
                     log.warning("facts for %s failed: %s", page.uid, e)
             page.facts = [g for g in page.facts if g.lines]
             self._add_chapters(page, layout_id, raw.get("TextKeyPrefix"))
-            pages.append(page)
+            if page.facts or page.chapters:  # a page with nothing on it cannot answer anything
+                pages.append(page)
         return pages
 
     def _search_terms(self) -> dict[tuple[str, str], list[str]]:
@@ -335,6 +373,27 @@ class Pedia:
         for r in self.q("SELECT CivilizationType FROM CivilizationTraits WHERE TraitType = ?", trait_type):
             out.append(self.name("Civilizations", "CivilizationType", r["CivilizationType"]))
         return _unique([o for o in out if o])
+
+    def trait_owners(self, trait_type, expand: bool = True) -> set[str]:
+        """Civilization and leader types a trait belongs to (with each one's leaders or civilizations if expand)."""
+        if not trait_type:
+            return set()
+        out = set()
+        for r in self.q("SELECT LeaderType FROM LeaderTraits WHERE TraitType = ?", trait_type):
+            out.add(r["LeaderType"])
+            if expand:
+                out |= {
+                    c["CivilizationType"]
+                    for c in self.q("SELECT * FROM CivilizationLeaders WHERE LeaderType = ?", r["LeaderType"])
+                }
+        for r in self.q("SELECT CivilizationType FROM CivilizationTraits WHERE TraitType = ?", trait_type):
+            out.add(r["CivilizationType"])
+            if expand:
+                out |= {
+                    c["LeaderType"]
+                    for c in self.q("SELECT * FROM CivilizationLeaders WHERE CivilizationType = ?", r["CivilizationType"])
+                }
+        return out
 
     def beliefs_granting(self, effect: str, arg_name: str, value: str) -> list[str]:
         rows = self.q(
@@ -490,6 +549,22 @@ class Pedia:
             page.chapters[0:0] = [Chapter(f"{heading}: {a.title}", a.paragraphs) for a in abilities]
 
 
+_NAMED_TYPES = [
+    ("Yields", "YieldType"),
+    ("Districts", "DistrictType"),
+    ("Buildings", "BuildingType"),
+    ("Units", "UnitType"),
+    ("Improvements", "ImprovementType"),
+    ("Technologies", "TechnologyType"),
+    ("Civics", "CivicType"),
+    ("Policies", "PolicyType"),
+    ("Governments", "GovernmentType"),
+    ("Resources", "ResourceType"),
+    ("Beliefs", "BeliefType"),
+    ("GreatPersonClasses", "GreatPersonClassType"),
+]
+
+
 def _col(row, name):
     if row is None:
         return None
@@ -497,6 +572,14 @@ def _col(row, name):
         return row[name]
     except (IndexError, KeyError):
         return None
+
+
+def _number_or_text(value):
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return value
+    return int(f) if f == int(f) else f
 
 
 def _unique(items):
@@ -682,8 +765,8 @@ def building(p: Pedia, page: Page) -> None:
         slot = (r["GreatWorkSlotType"] or "").replace("GREATWORKSLOT_", "")
         traits.line(f"LOC_TYPE_TRAIT_GREAT_WORKS_{slot}_SLOTS", r["NumSlots"])
     bombs = sum(r["TourismBombValue"] or 0 for r in p.q("SELECT * FROM Building_TourismBombs_XP2 WHERE BuildingType = ?", bt))
-    if bombs and _col(b, "IsWonder"):
-        bombs += p.param("TOURISM_BOMB_WONDER_ADDITIONAL")
+    if _col(b, "MaxWorldInstances") not in (None, -1):
+        bombs += p.param("TOURISM_BOMB_WONDER_ADDITIONAL")  # every wonder, with or without a row of its own
     if bombs:
         traits.line("LOC_UI_PEDIA_TOURISM_BOMB_VALUE_BUILDING", bombs)
     traits.lines(
@@ -763,6 +846,42 @@ def building(p: Pedia, page: Page) -> None:
     if _col(xp2, "RequiredPower"):
         req.header("LOC_UI_PEDIA_POWER_COST")
         req.line("LOC_UI_PEDIA_BASE_POWER_LOAD", xp2["RequiredPower"])
+
+    # Better Civilopedia's extra facts.
+    more = []
+    if (_col(b, "OuterDefenseStrength") or 0) > 0:
+        more.append(f"{p.text('LOC_COMBAT_PREVIEW_BASE_STRENGTH')}: {p.text('+{1} [ICON_Strength]', b['OuterDefenseStrength'])}")
+    if (_col(b, "RegionalRange") or 0) > 0:
+        more.append(f"{p.text('LOC_UI_PEDIA_RANGE')}: {_num(b['RegionalRange'])}")
+    for r in p.q("SELECT * FROM Building_GreatWorks WHERE BuildingType = ?", bt):
+        more.append(p.text(_col(r, "ThemingBonusDescription")))
+    for r in p.q("SELECT * FROM Building_YieldsPerEra WHERE BuildingType = ?", bt):
+        more.append(p.yield_line("LOC_TYPE_TRAIT_YIELD", r["YieldChange"], r["YieldType"]) + f" ({p.text('LOC_ERA_NAME')})")
+    tier = _col(b, "GovernmentTierRequirement")
+    if tier:
+        more += [
+            p.text("LOC_TOOLTIP_UNLOCKS_GOVERNMENT", g["Name"]) for g in p.q("SELECT Name FROM Governments WHERE Tier = ?", tier)
+        ]
+    trait_heading = p.text("LOC_UI_PEDIA_TRAITS")
+    group = next((g for g in reversed(page.facts) if g.heading == trait_heading), None)
+    if group is None:
+        group = FactGroup(trait_heading)
+        page.facts.insert(0, group)
+    group.lines += [m for m in more if m]
+    more = _Box(page, p.loc, "LOC_UI_PEDIA_USAGE")
+    more.lines(
+        "LOC_UI_PEDIA_USAGE_UNLOCKS_BUILDINGS",
+        _sorted_names(
+            p.name("Buildings", "BuildingType", r["Building"])
+            for r in p.q("SELECT * FROM BuildingPrereqs WHERE PrereqBuilding = ?", bt)
+        ),
+    )
+    more.lines(
+        "LOC_UI_PEDIA_USAGE_UNLOCKS_UNITS",
+        _sorted_names(
+            p.name("Units", "UnitType", r["Unit"]) for r in p.q("SELECT * FROM Unit_BuildingPrereqs WHERE PrereqBuilding = ?", bt)
+        ),
+    )
     p.description(page, _col(b, "Description"))
 
 
@@ -789,21 +908,38 @@ def unit(p: Pedia, page: Page) -> None:
             for r in p.q("SELECT * FROM UnitReplaces WHERE ReplacesUnitType = ?", ut)
         ],
     )
-    traits.lines(
-        "LOC_UI_PEDIA_UPGRADES_TO",
-        [p.name("Units", "UnitType", r["UpgradeUnit"]) for r in p.q("SELECT * FROM UnitUpgrades WHERE Unit = ?", ut)],
-    )
-    base = [r["ReplacesUnitType"] for r in p.q("SELECT * FROM UnitReplaces WHERE CivUniqueUnitType = ?", ut)]
-    upgrade_from = [r["Unit"] for t in [ut] + base for r in p.q("SELECT * FROM UnitUpgrades WHERE UpgradeUnit = ?", t)]
-    traits.lines(
-        "LOC_UI_PEDIA_UPGRADE_FROM",
-        [p.name("Units", "UnitType", t) for t in upgrade_from if not _col(p.get("Units", "UnitType", t), "TraitType")],
-    )
+    owners = p.trait_owners(_col(u, "TraitType"), expand=False)
+
+    def matches_unique(other) -> bool:
+        # On a unique unit's page, other civilizations' unique units are left out of the upgrade path.
+        if other is None or _col(other, "TraitType") == "TRAIT_BARBARIAN":
+            return False
+        return not owners or not _col(other, "TraitType") or bool(owners & p.trait_owners(other["TraitType"]))
+
+    replaced_by = p.q("SELECT * FROM UnitReplaces")
+    upgrades_to, upgrades_from = [], []
+    for r in p.q("SELECT * FROM UnitUpgrades"):
+        if r["Unit"] == ut:
+            target = p.get("Units", "UnitType", r["UpgradeUnit"])
+            if target is not None and _col(target, "TraitType") != "TRAIT_BARBARIAN":
+                if matches_unique(target):
+                    upgrades_to.append(target)
+                upgrades_to += [
+                    v
+                    for v in (p.get("Units", "UnitType", x["CivUniqueUnitType"]) for x in replaced_by)
+                    if v is not None and replaces_type(replaced_by, v["UnitType"]) == target["UnitType"] and matches_unique(v)
+                ]
+        if r["UpgradeUnit"] == ut or r["UpgradeUnit"] == replaces_type(replaced_by, ut):
+            source = p.get("Units", "UnitType", r["Unit"])
+            if matches_unique(source):
+                upgrades_from.append(source)
+    traits.lines("LOC_UI_PEDIA_UPGRADES_TO", _unique(p.text(x["Name"]) for x in upgrades_to))
+    traits.lines("LOC_UI_PEDIA_UPGRADE_FROM", _unique(p.text(x["Name"]) for x in upgrades_from))
     obsolete = p._tech_or_civic(_col(u, "ObsoleteCivic"), _col(u, "ObsoleteTech"))
     traits.lines("LOC_UI_PEDIA_MADE_OBSOLETE_BY", [p.text(obsolete)] if obsolete else [])
     traits.header("LOC_UI_PEDIA_TRAITS")
     promo = p.name("UnitPromotionClasses", "PromotionClassType", _col(u, "PromotionClass"))
-    if promo:
+    if promo and page.layout != "HeroUnit":
         traits.line("LOC_UNIT_PROMOTION_CLASS", promo)
     stats = [
         ("BaseMoves", "LOC_UI_PEDIA_MOVEMENT_POINTS"),
@@ -817,8 +953,12 @@ def unit(p: Pedia, page: Page) -> None:
         ("BuildCharges", "LOC_UI_PEDIA_BUILD_CHARGES"),
         ("ReligiousHealCharges", "LOC_UI_PEDIA_HEAL_CHARGES"),
     ]
+    if u["UnitType"] == "UNIT_SPY" and p.param("ESPIONAGE_MAX_LEVEL") > 1:
+        traits.line("LOC_TYPE_TRAIT_MAX_PROMOTIONS", p.param("ESPIONAGE_MAX_LEVEL") - 1)
     for col, key in stats:
         value = _col(u, col)
+        if col == "BaseMoves" and _col(u, "IgnoreMoves") and _col(u, "Domain") != "DOMAIN_AIR":
+            continue  # units that move by teleporting (spies, traders) show no movement
         if value:
             traits.line(f"{p.text(key)}: {_num(value)}")
     if _col(u, "AirSlots"):
@@ -864,6 +1004,13 @@ def unit(p: Pedia, page: Page) -> None:
             _col(p.get("Resources", "ResourceType", maint_res), "Name"),
         )
 
+    if _col(xp2, "TourismBombPossible"):
+        concerts = _Box(page, p.loc, "LOC_UI_PEDIA_UNIT_ROCK_BAND_TOURISM_BUILDING_HEADER")
+        for r in p.q("SELECT * FROM Building_TourismBombs_XP2"):
+            name = p.name("Buildings", "BuildingType", r["BuildingType"])
+            if name:
+                concerts.line(f"+{_num(r['TourismBombValue'])} {p.text('LOC_UI_PEDIA_UNIT_ROCK_BAND_TOURISM_BUILDING', name)}")
+
     usage = _Box(page, p.loc, "LOC_UI_PEDIA_USAGE")
     usage.lines(
         "LOC_UI_PEDIA_USAGE_CAN_CONSTRUCT",
@@ -878,7 +1025,104 @@ def unit(p: Pedia, page: Page) -> None:
             ]
         ),
     )
+    if _col(u, "Spy"):
+        missions = _Box(page, p.loc, "LOC_UI_PEDIA_ESPIONAGE_MISSIONS")
+        for r in p.q("SELECT * FROM UnitOperations WHERE InterfaceMode = 'INTERFACEMODE_SPY_CHOOSE_MISSION'"):
+            parts = []
+            if (_col(r, "Turns") or 0) > 0:
+                parts.append(p.text("LOC_TYPE_TRAIT_TURNS", r["Turns"]))
+            if (_col(r, "BaseProbability") or 0) > 0:
+                parts.append(p.text("LOC_TYPE_TRAIT_BASE_PROBABILITY", _three_dice_odds(r["BaseProbability"])))
+            if _col(r, "TargetDistrict"):
+                parts.append(p.text("LOC_TYPE_TRAIT_TARGET_DISTRICT", p.name("Districts", "DistrictType", r["TargetDistrict"])))
+            name = p.text(r["Description"])
+            missions.line(f"{name} ({'; '.join(parts)})" if parts else name)
+    if page.layout == "HeroUnit":
+        hero_abilities(p, page, ut)
+    great_person_sources(p, page, ut)
     p.description(page, _col(u, "Description"))
+
+
+def great_person_sources(p: Pedia, page: Page, unit_type: str) -> None:
+    """Better Civilopedia: on a great person's unit page (Great Scientist...), where its points come from."""
+    gp = next(iter(p.q("SELECT * FROM GreatPersonClasses WHERE UnitType = ?", unit_type)), None)
+    if gp is None:
+        return
+    cls = gp["GreatPersonClassType"]
+
+    def per_turn(n) -> str:
+        return p.text("LOC_TYPE_TRAIT_GREAT_PERSON_POINTS", n, gp["IconString"], gp["Name"])
+
+    box = _Box(page, p.loc, "LOC_PEDIA_DISTRICTS_TITLE")
+    for r in p.q("SELECT * FROM District_GreatPersonPoints WHERE GreatPersonClassType = ?", cls):
+        box.line(f"{p.name('Districts', 'DistrictType', r['DistrictType'])}: {per_turn(r['PointsPerTurn'])}")
+    buildings = p.q(
+        "SELECT b.Name, b.IsWonder, g.PointsPerTurn FROM Building_GreatPersonPoints g "
+        "JOIN Buildings b ON b.BuildingType = g.BuildingType WHERE g.GreatPersonClassType = ?",
+        cls,
+    )
+    for heading, wonder in (("LOC_PEDIA_BUILDINGS_TITLE", False), ("LOC_PEDIA_WONDERS_PAGEGROUP_WONDERS_NAME", True)):
+        lines = [f"{p.text(r['Name'])}: {per_turn(r['PointsPerTurn'])}" for r in buildings if bool(r["IsWonder"]) == wonder]
+        box.lines(heading, lines)
+    box.lines(
+        "LOC_PEDIA_WONDERS_PAGEGROUP_PROJECTS_NAME",
+        [
+            f"{p.name('Projects', 'ProjectType', r['ProjectType'], 'ShortName')}: {_num(r['Points'])} {p.text(gp['Name'])} points"
+            for r in p.q("SELECT * FROM Project_GreatPersonPoints WHERE GreatPersonClassType = ?", cls)
+        ],
+    )
+
+
+def replaces_type(replaces, unit_type) -> str | None:
+    return next((r["ReplacesUnitType"] for r in replaces if r["CivUniqueUnitType"] == unit_type), None)
+
+
+_THREE_DICE = [0, 0, 1, 3, 6, 10, 15, 21, 25, 27, 27, 25, 21, 15, 10, 6, 3, 1]  # ways to roll 1..18 on three dice
+
+
+def _three_dice_odds(at_least: int) -> int:
+    """A spy mission's chance as the game's Civilopedia shows it: rolling at least N on three dice."""
+    ways = sum(_THREE_DICE[i - 1] for i in range(max(1, int(at_least)), 19))
+    return int(ways / 216 * 100 + 0.5)
+
+
+# Heroes mode: abilities each hero has, hard-coded in the game's HeroesSupport.lua.
+_HERO_ABILITIES = {
+    "HEROCLASS_ANANSI": ["ABILITY_HERO_IGNORE_FOREST_TERRAIN_COST"],
+    "HEROCLASS_BEOWULF": ["ABILITY_HERO_IGNORE_HILLS_TERRAIN_COST"],
+    "HEROCLASS_HERCULES": ["ABILITY_HERO_IGNORE_HILLS_TERRAIN_COST"],
+    "HEROCLASS_HIMIKO": [
+        "ABILITY_HERO_COMBAT_STRENGTH_AOE",
+        "ABILITY_HERO_ENTER_FOREIGN_LANDS",
+        "ABILITY_HERO_IGNORE_ALL_TERRAIN_COST",
+    ],
+    "HEROCLASS_HIPPOLYTA": ["ABILITY_HIPPOLYTA_HEAL_PER_TURN", "ABILITY_HERO_IGNORE_HILLS_TERRAIN_COST"],
+    "HEROCLASS_HUNAHPU": ["ABILITY_HUNAHPU_RESURRECT_KILL", "ABILITY_HERO_IGNORE_FOREST_TERRAIN_COST"],
+    "HEROCLASS_OYA": ["ABILITY_HERO_IGNORE_ALL_TERRAIN_COST"],
+    "HEROCLASS_MAUI": ["ABILITY_HERO_IGNORE_FOREST_TERRAIN_COST"],
+    "HEROCLASS_MULAN": ["ABILITY_MULAN_STRENGTH_PER_TURN", "ABILITY_MULAN_FORTIFY"],
+    "HEROCLASS_SINBAD": ["ABILITY_SINBAD_GOLD_FOR_DISCOVERY", "ABILITY_SINBAD_OCEAN_VALID_TERRAIN"],
+    "HEROCLASS_WUKONG": ["ABILITY_WUKONG_STEALTH", "ABILITY_WUKONG_LIFESPAN", "ABILITY_HERO_IGNORE_ALL_TERRAIN_COST"],
+}
+
+
+def hero_abilities(p: Pedia, page: Page, unit_type: str) -> None:
+    hero = next(iter(p.q("SELECT * FROM HeroClasses WHERE UnitType = ?", unit_type)), None)
+    if hero is None:
+        return
+    lines = []
+    for ability in _HERO_ABILITIES.get(hero["HeroClassType"], []):
+        a = p.get("UnitAbilities", "UnitAbilityType", ability)
+        if a is not None:
+            lines.append(f"{p.text(a['Name'])}: {p.text(_col(a, 'Description'))}")
+    for r in p.q(
+        "SELECT c.Description, c.Help FROM HeroClassUnitCommands h JOIN UnitCommands c ON c.CommandType = h.UnitCommandType "
+        "WHERE h.HeroClassType = ?",
+        hero["HeroClassType"],
+    ):
+        lines.append(f"{p.text(r['Description'])}: {p.text(r['Help'])}")
+    if lines:
+        page.chapters.insert(0, Chapter(p.text("LOC_PEDIA_PAGE_CHAPTER_HEROABILITIES_TITLE"), ["\n".join(lines)]))
 
 
 def improvement(p: Pedia, page: Page) -> None:
@@ -914,6 +1158,8 @@ def improvement(p: Pedia, page: Page) -> None:
             traits.line(key, i[col])
     for r in p.q("SELECT * FROM Improvement_BonusYieldChanges WHERE ImprovementType = ?", it):
         prereq = p._tech_or_civic(_col(r, "PrereqCivic"), _col(r, "PrereqTech"))
+        if not prereq:
+            continue
         traits.line(p.yield_line("LOC_TYPE_TRAIT_BONUS_YIELD", r["BonusYieldChange"], r["YieldType"], prereq))
     for r in p.q("SELECT * FROM Improvement_Tourism WHERE ImprovementType = ?", it):
         prereq = p._tech_or_civic(_col(r, "PrereqCivic"), _col(r, "PrereqTech"))
@@ -971,8 +1217,12 @@ def _unlocks(p: Pedia, col: str, value: str) -> list[str]:
             if _col(r, "InternalOnly"):
                 continue
             names.append(p.text(r[name_col]))
-    if col == "PrereqTech":
-        names += [p.text(r["Name"]) for r in p.q("SELECT * FROM Resources WHERE PrereqTech = ?", value)]
+    names += [p.text(r["Name"]) for r in p.q(f"SELECT * FROM Resources WHERE {col} = ?", value)]
+    names += [
+        p.text(r["Name"]) for r in p.q(f"SELECT * FROM DiplomaticActions WHERE Initiator{col} = ? AND Name IS NOT NULL", value)
+    ]
+    if col == "PrereqCivic" and value == "CIVIC_DIPLOMATIC_SERVICE":
+        names.append(p.name("Units", "UnitType", "UNIT_SPY"))  # hard-coded in the game's CivilopediaPage_Civic.lua
     return _sorted_names(names)
 
 
@@ -1029,7 +1279,9 @@ def resource(p: Pedia, page: Page) -> None:
         return
     rt = r0["ResourceType"]
     cls = (_col(r0, "ResourceClassType") or "").replace("RESOURCECLASS_", "")
-    traits = _Box(page, p.loc, f"LOC_RESOURCECLASS_{cls}_NAME" if cls else "LOC_UI_PEDIA_TRAITS")
+    traits = _Box(page, p.loc, "LOC_UI_PEDIA_TRAITS")
+    if cls in ("BONUS", "LUXURY", "STRATEGIC", "ARTIFACT"):
+        traits.line(f"LOC_RESOURCECLASS_{cls}_NAME")
     for y in p.q("SELECT * FROM Yields"):
         total = sum(
             r["YieldChange"]
@@ -1045,6 +1297,21 @@ def resource(p: Pedia, page: Page) -> None:
     req = _Box(page, p.loc, "LOC_UI_PEDIA_REQUIREMENTS")
     unlocked = p._tech_or_civic(_col(r0, "PrereqCivic"), _col(r0, "PrereqTech"))
     req.lines("LOC_UI_PEDIA_UNLOCKED_BY", [p.text(unlocked)] if unlocked else [])
+    if rt in ("RESOURCE_CLOVES", "RESOURCE_CINNAMON"):  # hard-coded in the game's CivilopediaPage_Resource.lua
+        req.lines("LOC_UI_PEDIA_SUZERAIN", [p.name("Civilizations", "CivilizationType", "CIVILIZATION_ZANZIBAR")])
+    creators = []
+    for gp in p.q("SELECT DISTINCT GreatPersonIndividualType FROM GreatPersonIndividualActionModifiers"):
+        gpt = gp["GreatPersonIndividualType"]
+        args = p.modifier_args(
+            "GreatPersonIndividualActionModifiers",
+            "GreatPersonIndividualType",
+            gpt,
+            "EFFECT_GRANT_FREE_RESOURCE_IN_CITY",
+            "ResourceType",
+        )
+        if rt in args:
+            creators.append(p.name("GreatPersonIndividuals", "GreatPersonIndividualType", gpt))
+    req.lines("LOC_UI_PEDIA_CREATED_BY", creators)
     req.lines(
         "LOC_UI_PEDIA_PLACEMENT",
         _sorted_names(
@@ -1074,6 +1341,29 @@ def resource(p: Pedia, page: Page) -> None:
             line += " " + p.text("LOC_UI_PEDIA_REQUIRES", tech)
         harvest.append(line)
     usage.lines("LOC_UI_PEDIA_HARVEST", harvest)
+    buildings = _sorted_names(
+        p.name("Buildings", "BuildingType", r["BuildingType"])
+        for r in p.q("SELECT BuildingType FROM Buildings_XP2 WHERE ResourceTypeConvertedToPower = ?", rt)
+    )
+    projects = _sorted_names(
+        [p.name("Projects", "ProjectType", r["ProjectType"]) for r in p.q("SELECT * FROM Projects WHERE PrereqResource = ?", rt)]
+        + [
+            p.name("Projects", "ProjectType", r["ProjectType"])
+            for r in p.q("SELECT * FROM Project_ResourceCosts WHERE ResourceType = ?", rt)
+        ]
+    )
+    routes = _sorted_names(
+        p.name("Routes", "RouteType", r["RouteType"]) for r in p.q("SELECT * FROM Route_ResourceCosts WHERE ResourceType = ?", rt)
+    )
+    for key, names in (
+        ("LOC_UI_PEDIA_RESOURCES_BUILDINGS", buildings),
+        ("LOC_UI_PEDIA_RESOURCES_PROJECTS", projects),
+        ("LOC_UI_PEDIA_RESOURCES_ROUTES", routes),
+    ):
+        if names:
+            usage.header(key, len(names))
+            for n in names:
+                usage.line(n)
     units = [p.text(r["Name"]) for r in p.q("SELECT Name FROM Units WHERE StrategicResource = ?", rt)]
     units += [
         p.name("Units", "UnitType", r["UnitType"])
@@ -1084,14 +1374,6 @@ def resource(p: Pedia, page: Page) -> None:
         usage.header("LOC_UI_PEDIA_RESOURCES_UNITS", len(units))
         for u in units:
             usage.line(u)
-    buildings = _sorted_names(
-        p.name("Buildings", "BuildingType", r["BuildingType"])
-        for r in p.q("SELECT BuildingType FROM Buildings_XP2 WHERE ResourceTypeConvertedToPower = ?", rt)
-    )
-    if buildings:
-        usage.header("LOC_UI_PEDIA_RESOURCES_BUILDINGS", len(buildings))
-        for b in buildings:
-            usage.line(b)
 
 
 def feature(p: Pedia, page: Page, terrain: bool = False) -> None:
@@ -1172,6 +1454,25 @@ def civilization(p: Pedia, page: Page) -> None:
             for r in p.q("SELECT * FROM FavoredReligions WHERE CivilizationType = ? AND LeaderType IS NULL", ct)
         ],
     )
+    bias = _Box(page, p.loc, "LOC_UI_PEDIA_START_BIAS")
+    lines = [
+        f"{p.text('LOC_TOOLTIP_RIVER')}: {r['Tier']}" for r in p.q("SELECT * FROM StartBiasRivers WHERE CivilizationType = ?", ct)
+    ]
+    for table, col, names in (
+        ("StartBiasTerrains", "TerrainType", "Terrains"),
+        ("StartBiasFeatures", "FeatureType", "Features"),
+        ("StartBiasResources", "ResourceType", "Resources"),
+    ):
+        lines += [
+            f"{p.name(names, col, r[col])}: {r['Tier']}" for r in p.q(f"SELECT * FROM {table} WHERE CivilizationType = ?", ct)
+        ]
+    for line in lines:
+        bias.line(line)
+    geo = _Box(page, p.loc, "LOC_UI_PEDIA_GEOGRAPHY_AND_SOCIAL_DATA")
+    info = p.q("SELECT * FROM CivilizationInfo WHERE CivilizationType = ?", ct)
+    for r in sorted(info, key=lambda r: (float(r["SortIndex"] or 0), p.text(r["Header"]))):
+        geo.header(r["Header"])
+        geo.line(r["Caption"])
     p.unique_abilities(page, "CivilizationTraits", "CivilizationType", [ct])
 
 
@@ -1187,7 +1488,8 @@ def leader(p: Pedia, page: Page) -> None:
         "LOC_UI_PEDIA_CIVILIZATIONS",
         [
             p.name("Civilizations", "CivilizationType", r["CivilizationType"])
-            for r in p.q("SELECT * FROM CivilizationLeaders WHERE LeaderType = ?", lt)
+            for x in chain
+            for r in p.q("SELECT * FROM CivilizationLeaders WHERE LeaderType = ?", x)
         ],
     )
     units, infra = p.trait_owned("LeaderTraits", "LeaderType", chain)
@@ -1197,8 +1499,8 @@ def leader(p: Pedia, page: Page) -> None:
     agendas = []
     for r in p.q(
         "SELECT a.Name, a.Description FROM HistoricalAgendas h JOIN Agendas a ON a.AgendaType = h.AgendaType "
-        "WHERE h.LeaderType = ?",
-        lt,
+        f"WHERE h.LeaderType IN ({','.join('?' * len(chain))})",
+        *chain,
     ):
         agendas.append(f"{p.text(r['Name'])}: {p.text(r['Description'])}")
     prefs.lines("LOC_UI_PEDIA_AGENDAS", agendas)
@@ -1206,7 +1508,8 @@ def leader(p: Pedia, page: Page) -> None:
         "LOC_UI_PEDIA_PREFERRED_RELIGION",
         [
             p.name("Religions", "ReligionType", r["ReligionType"])
-            for r in p.q("SELECT * FROM FavoredReligions WHERE CivilizationType IS NULL AND LeaderType = ?", lt)
+            for x in chain
+            for r in p.q("SELECT * FROM FavoredReligions WHERE CivilizationType IS NULL AND LeaderType = ?", x)
         ],
     )
     p.unique_abilities(page, "LeaderTraits", "LeaderType", chain)
@@ -1222,10 +1525,18 @@ def city_state(p: Pedia, page: Page) -> None:
         key = "LOC_CITY_STATES_SCENARIO_TYPE_MARITIME" if kind == "MARITIME" else f"LOC_CITY_STATES_TYPE_{kind}"
         if p.loc.has(key):
             box.line(key)
-    abilities_before = len(page.chapters)
+    chain = []
+    for lt in leaders:
+        while lt and lt not in chain:
+            chain.append(lt)
+            lt = _col(p.get("Leaders", "LeaderType", lt), "InheritFrom")
+    before = list(page.chapters)
+    page.chapters.clear()
     p.unique_abilities(page, "CivilizationTraits", "CivilizationType", [ct], filter_used=False)
-    if len(page.chapters) == abilities_before:
-        p.unique_abilities(page, "LeaderTraits", "LeaderType", leaders, filter_used=False)
+    civ_abilities = list(page.chapters)
+    page.chapters.clear()
+    p.unique_abilities(page, "LeaderTraits", "LeaderType", chain, filter_used=False)
+    page.chapters = civ_abilities + [c for c in page.chapters if c not in civ_abilities] + before
 
 
 def policy(p: Pedia, page: Page) -> None:
@@ -1252,13 +1563,16 @@ def policy(p: Pedia, page: Page) -> None:
         if era:
             req.line(key, p.name("Eras", "EraType", era))
     p.prereqs(req, pol)
-    req.lines(
-        "LOC_GOVERNMENT_NAME",
-        [
-            p.name("Governments", "GovernmentType", r["GovernmentType"])
-            for r in p.q("SELECT * FROM Policy_GovernmentExclusives_XP2 WHERE PolicyType = ?", pt)
-        ],
-    )
+    exclusive = [
+        p.name("Governments", "GovernmentType", r["GovernmentType"])
+        for r in p.q("SELECT * FROM Policy_GovernmentExclusives_XP2 WHERE PolicyType = ?", pt)
+    ]
+    req.lines("LOC_GOVERNMENT_NAME", exclusive)
+    unlocked_by = [p.text(r["Name"]) for r in p.q("SELECT Name FROM Governments WHERE PolicyToUnlock = ?", pt)]
+    if unlocked_by:
+        if not exclusive:
+            req.header("LOC_GOVERNMENT_NAME")
+        req.line(f"{p.text('LOC_UI_PEDIA_REQUIRES_NOT_GOVERNMENT')} {', '.join(unlocked_by)}")
     p.description(page, _col(pol, "Description"))
 
 
@@ -1278,6 +1592,26 @@ def government(p: Pedia, page: Page) -> None:
         traits.line("LOC_UI_PEDIA_TRAIT_SLOT_TYPE", r["NumSlots"], slot)
     req = _Box(page, p.loc, "LOC_UI_PEDIA_REQUIREMENTS")
     p.prereqs(req, g)
+    req.lines(
+        "LOC_UI_PEDIA_MADE_EXCLUSIVE_GOVENMENT",
+        [
+            p.name("Policies", "PolicyType", r["PolicyType"])
+            for r in p.q("SELECT * FROM Policy_GovernmentExclusives_XP2 WHERE GovernmentType = ?", gt)
+        ],
+    )
+    influence = []
+    if _col(g, "InfluencePointsPerTurn"):
+        influence.append(
+            p.text(
+                "LOC_GOVT_INFLUENCE_POINTS_TOWARDS_ENVOYS",
+                g["InfluencePointsPerTurn"],
+                _col(g, "InfluencePointsThreshold"),
+                _col(g, "InfluenceTokensPerThreshold"),
+            )
+        )
+    if favor:
+        influence.append(p.text("LOC_GOVT_FAVOR_PER_TURN", favor))
+    traits.lines("LOC_HUD_REPORTS_BONUSES", influence)
     inherent, accumulated = _col(g, "InherentBonusDesc"), _col(g, "AccumulatedBonusShortDesc")
     if inherent and accumulated:
         page.chapters[0:0] = [
@@ -1304,9 +1638,13 @@ def project(p: Pedia, page: Page) -> None:
             for r in p.q("SELECT * FROM ProjectPrereqs WHERE ProjectType = ?", pr["ProjectType"])
         ),
     )
-    if _col(pr, "Cost"):
+    if _col(pr, "Cost") and (_col(pr, "CostProgressionModel") or "NO_PROGRESSION_MODEL") == "NO_PROGRESSION_MODEL":
         req.header("LOC_UI_PEDIA_PRODUCTION_COST")
         req.line(p.cost_line(pr["Cost"], "YIELD_PRODUCTION"))
+    if "CREATE_HERO" in pr["ProjectType"]:
+        hero = pr["ProjectType"].replace("PROJECT_CREATE_HERO_", "")
+        unlocks = _Box(page, p.loc, "LOC_UI_PEDIA_UNLOCKS")
+        unlocks.line(f"LOC_UNIT_HERO_{hero}_NAME")
     p.description(page, _col(pr, "Description"))
 
 
@@ -1314,30 +1652,58 @@ def great_person(p: Pedia, page: Page) -> None:
     gp = p.get("GreatPersonIndividuals", "GreatPersonIndividualType", page.page_id)
     if gp is None:
         return
+    gpt = gp["GreatPersonIndividualType"]
+    gp_class = p.get("GreatPersonClasses", "GreatPersonClassType", _col(gp, "GreatPersonClassType"))
     traits = _Box(page, p.loc, "LOC_UI_PEDIA_TRAITS")
     era = p.name("Eras", "EraType", _col(gp, "EraType"))
-    if era:
+    if era and _col(gp_class, "AvailableInTimeline"):
         traits.line(era)
-    cls = p.name("GreatPersonClasses", "GreatPersonClassType", _col(gp, "GreatPersonClassType"))
-    if cls:
-        traits.line(cls)
+    if gp_class is not None:
+        traits.line(p.text(gp_class["Name"]))
+    usage = _Box(page, p.loc, "LOC_UI_PEDIA_USAGE")
+    usage.lines(
+        "LOC_UI_PEDIA_CREATES",
+        [
+            p.name("Resources", "ResourceType", r)
+            for r in p.modifier_args(
+                "GreatPersonIndividualActionModifiers",
+                "GreatPersonIndividualType",
+                gpt,
+                "EFFECT_GRANT_FREE_RESOURCE_IN_CITY",
+                "ResourceType",
+            )
+        ],
+    )
+
+    def abilities(table: str) -> list[str]:
+        rows = p.q(f"SELECT ModifierId FROM {table} WHERE GreatPersonIndividualType = ?", gpt)
+        return [t for t in (p.modifier_text(r["ModifierId"]) for r in rows) if t]
+
+    active, passive = abilities("GreatPersonIndividualActionModifiers"), abilities("GreatPersonIndividualBirthModifiers")
     chapters = []
-    works = [
-        p.text(r["Name"])
-        for r in p.q("SELECT Name FROM GreatWorks WHERE GreatPersonIndividualType = ?", gp["GreatPersonIndividualType"])
-    ]
+    works = [p.text(r["Name"]) for r in p.q("SELECT Name FROM GreatWorks WHERE GreatPersonIndividualType = ?", gpt)]
     if works:
-        chapters.append(Chapter(p.text("LOC_UI_PEDIA_GREAT_WORKS"), ["\n".join("• " + w for w in works)]))
-    if (_col(gp, "ActionCharges") or 0) > 0 and _col(gp, "ActionEffectTextOverride"):
+        paragraphs = ["\n".join("• " + w for w in works)]
+        if p.loc.has("LOC_GREATPERSON_ACTION_USAGE_CREATE_GREAT_WORK"):
+            paragraphs.append(p.text("LOC_GREATPERSON_ACTION_USAGE_CREATE_GREAT_WORK"))
+        chapters.append(Chapter(p.text("LOC_UI_PEDIA_GREAT_WORKS"), paragraphs))
+    heading = p.text("LOC_UI_PEDIA_UNIQUE_ABILITY")
+    if _col(gp, "GreatPersonClassType") == "GREAT_PERSON_CLASS_PROPHET" and p.loc.has(
+        "LOC_GREATPERSON_ACTION_USAGE_FOUND_RELIGION"
+    ):
+        chapters.append(Chapter(heading, [p.text("LOC_GREATPERSON_ACTION_USAGE_FOUND_RELIGION")]))
+    if (_col(gp, "ActionCharges") or 0) > 0 and (active or _col(gp, "ActionEffectTextOverride")):
         title = p.text(
             "LOC_UI_PEDIA_GREATPERSON_ACTION",
             _col(gp, "ActionNameTextOverride") or "LOC_GREATPERSON_ACTION_NAME_DEFAULT",
             gp["ActionCharges"],
         )
-        chapters.append(Chapter(title, [p.text(gp["ActionEffectTextOverride"])]))
-    if _col(gp, "BirthEffectTextOverride"):
+        body = p.text(gp["ActionEffectTextOverride"]) if _col(gp, "ActionEffectTextOverride") else "\n".join(active)
+        chapters.append(Chapter(f"{heading}: {title}", [body]))
+    if passive or _col(gp, "BirthEffectTextOverride"):
         title = p.text(_col(gp, "BirthNameTextOverride") or "LOC_GREATPERSON_PASSIVE_NAME_DEFAULT")
-        chapters.append(Chapter(title, [p.text(gp["BirthEffectTextOverride"])]))
+        body = p.text(gp["BirthEffectTextOverride"]) if _col(gp, "BirthEffectTextOverride") else "\n".join(passive)
+        chapters.append(Chapter(f"{heading}: {title}", [body]))
     page.chapters[0:0] = chapters
 
 
@@ -1349,7 +1715,30 @@ def belief(p: Pedia, page: Page) -> None:
     cls = p.name("BeliefClasses", "BeliefClassType", _col(b, "BeliefClassType"))
     if cls:
         traits.line(cls)
+    bt = b["BeliefType"]
+
+    def unlocked(effect, arg, table, col):
+        return [p.name(table, col, v) for v in p.modifier_args("BeliefModifiers", "BeliefType", bt, effect, arg)]
+
+    traits.lines(
+        "LOC_UI_PEDIA_SPECIAL_INFRASTRUCTURE",
+        unlocked("EFFECT_ADD_RELIGIOUS_BUILDING", "BuildingType", "Buildings", "BuildingType")
+        + unlocked("EFFECT_ADJUST_PLAYER_VALID_IMPROVEMENT", "ImprovementType", "Improvements", "ImprovementType"),
+    )
+    traits.lines("LOC_UI_PEDIA_SPECIAL_UNITS", unlocked("EFFECT_ADD_RELIGIOUS_UNIT", "UnitType", "Units", "UnitType"))
     p.description(page, _col(b, "Description"))
+
+
+def religion(p: Pedia, page: Page) -> None:
+    followers = []
+    for r in p.q("SELECT * FROM FavoredReligions WHERE ReligionType = ?", page.page_id):
+        if not _col(r, "LeaderType") and _col(r, "CivilizationType"):
+            followers.append(p.name("Civilizations", "CivilizationType", r["CivilizationType"]))
+        elif _col(r, "LeaderType"):
+            followers.append(p.name("Leaders", "LeaderType", r["LeaderType"]))
+    box = _Box(page, p.loc, "LOC_UI_PEDIA_FOLLOWERS")
+    for f in followers:
+        box.line(f)
 
 
 def route(p: Pedia, page: Page) -> None:
@@ -1363,10 +1752,16 @@ def route(p: Pedia, page: Page) -> None:
         traits.line("LOC_ROUTE_SUPPORTS_BRIDGES")
     req = _Box(page, p.loc, "LOC_UI_PEDIA_REQUIREMENTS")
     req.lines("LOC_ERA_NAME", [p.name("Eras", "EraType", _col(r, "PrereqEra"))])
-    req.lines(
-        "LOC_TECHNOLOGY_NAME",
-        [p.name("Technologies", "TechnologyType", _col(p.get("Routes_XP2", "RouteType", r["RouteType"]), "PrereqTech"))],
-    )
+    xp2 = p.get("Routes_XP2", "RouteType", r["RouteType"])
+    req.lines("LOC_TECHNOLOGY_NAME", [p.name("Technologies", "TechnologyType", _col(xp2, "PrereqTech"))])
+    builders = [
+        p.name("Units", "UnitType", b["UnitType"])
+        for b in p.q("SELECT * FROM Route_ValidBuildUnits WHERE RouteType = ?", r["RouteType"])
+    ]
+    if not _col(xp2, "BuildOnlyWithUnit"):
+        builders.append(p.name("Units", "UnitType", "UNIT_TRADER"))
+    usage = _Box(page, p.loc, "LOC_UI_PEDIA_USAGE")
+    usage.lines("LOC_UI_PEDIA_BUILT_BY", _sorted_names(builders))
     p.description(page, _col(r, "Description"))
 
 
@@ -1438,6 +1833,315 @@ def historic_moment(p: Pedia, page: Page) -> None:
     p.description(page, _col(m, "Description"))
 
 
+# -- Better Civilopedia layouts ---------------------------------------------------------------
+# The Better Civilopedia mod (workshop 1341630847) adds these page types; ports of its
+# CivilopediaPage_BCP_Base/XP1/XP2.lua and of the extra facts its CivilopediaScreen_BCP.lua adds.
+
+_UNIT_TABLE_STATS = (
+    ("BaseMoves", "LOC_UI_PEDIA_MOVEMENT_POINTS"),
+    ("Combat", "LOC_UI_PEDIA_MELEE_STRENGTH"),
+    ("RangedCombat", "LOC_UI_PEDIA_RANGED_STRENGTH"),
+    ("Range", "LOC_UI_PEDIA_RANGE"),
+    ("Bombard", "LOC_UI_PEDIA_BOMBARD_STRENGTH"),
+    ("Cost", "LOC_HUD_PRODUCTION_COST"),
+)
+
+
+def _unit_group(base) -> str:
+    formation, promo = _col(base, "FormationClass"), _col(base, "PromotionClass")
+    if formation == "FORMATION_CLASS_AIR":
+        return "AIR"
+    if formation == "FORMATION_CLASS_NAVAL":
+        return "NAVAL"
+    if formation == "FORMATION_CLASS_SUPPORT":
+        return "SUPPORT"
+    if formation == "FORMATION_CLASS_LAND_COMBAT":
+        if promo in ("PROMOTION_CLASS_HEAVY_CAVALRY", "PROMOTION_CLASS_LIGHT_CAVALRY"):
+            return "CAVALRY"
+        if promo in ("PROMOTION_CLASS_RANGED", "PROMOTION_CLASS_SIEGE"):
+            return "RANGED"
+        return "MELEE"
+    return ""
+
+
+def table_units(p: Pedia, page: Page) -> None:
+    """Every unit of one kind (melee, naval, ...) by era, with its main stats."""
+    replaces = {r["CivUniqueUnitType"]: r["ReplacesUnitType"] for r in p.q("SELECT * FROM UnitReplaces")}
+    heroes = {r["UnitType"] for r in p.q("SELECT UnitType FROM HeroClasses")}
+    eras = {r["EraType"]: r for r in p.q("SELECT * FROM Eras")}
+    rows = []
+    for u in p.q("SELECT * FROM Units"):
+        if _col(u, "TraitType") == "TRAIT_BARBARIAN" or u["UnitType"] in heroes:
+            continue
+        base = p.get("Units", "UnitType", replaces.get(u["UnitType"])) or u
+        if _unit_group(base) != page.page_id:
+            continue
+        prereq = p.get("Technologies", "TechnologyType", _col(base, "PrereqTech")) or p.get(
+            "Civics", "CivicType", _col(base, "PrereqCivic")
+        )
+        era = eras.get(_col(prereq, "EraType")) or next(iter(sorted(eras.values(), key=_era_order)), None)
+        unique = bool(_col(u, "TraitType"))
+        rows.append((_era_order(era), base["Cost"] or 0, base["UnitType"], unique, u["UnitType"], u, base, era))
+    rows.sort(key=lambda r: r[:5])
+    group = None
+    for _, _, _, unique, _, u, base, era in rows:
+        heading = p.text(_col(era, "Name"))
+        if group is None or group.heading != heading:
+            group = FactGroup(heading)
+            page.facts.append(group)
+        stats = [f"{p.text(key)} {_num(u[col])}" for col, key in _UNIT_TABLE_STATS if _col(u, col)]
+        notes = p.unique_to(_col(u, "TraitType")) if unique else []
+        if base is not u:
+            notes.append(f"{p.text('LOC_UI_PEDIA_REPLACES')} {p.text(base['Name'])}")
+        name = p.text(u["Name"]) + (f" ({', '.join(notes)})" if notes else "")
+        group.lines.append(f"{name}: {', '.join(stats)}" if stats else name)
+
+
+def _era_order(era) -> int:
+    return _col(era, "ChronologyIndex") or 0
+
+
+def adjacencies(p: Pedia, page: Page) -> None:
+    """The adjacency bonuses of every district: standard ones first, then the unique ones."""
+    districts = [
+        d for d in p.q("SELECT * FROM Districts") if d["DistrictType"] not in ("DISTRICT_CITY_CENTER", "DISTRICT_WONDER")
+    ]
+    districts.sort(key=lambda d: (bool(_col(d, "TraitType")), p.text(d["Name"]).lower()))
+    for d in districts:
+        lines = p.adjacency_lines("District_Adjacencies", "DistrictType", d["DistrictType"])
+        if lines:
+            unique = p.unique_to(_col(d, "TraitType"))
+            name = p.text(d["Name"]) + (f" ({', '.join(unique)})" if unique else "")
+            page.facts.append(FactGroup(name, lines))
+
+
+_TIME_STRATEGIES = [
+    "ANCIENT",
+    "CLASSICAL",
+    "MEDIEVAL",
+    "RENAISSANCE",
+    "INDUSTRIAL",
+    "MODERN",
+    "ATOMIC",
+    "INFORMATION",
+    "FUTURE",
+]
+
+
+def time_strategy(p: Pedia, page: Page) -> None:
+    """What the AI favours in one era (its AiFavoredItems for that era's strategy), and the total so far."""
+    era = page.page_id.replace("TIME_", "").replace("_CHANGES", "")
+    if era not in _TIME_STRATEGIES:
+        return
+    upto = _TIME_STRATEGIES.index(era)
+    values: dict[str, list] = {}
+    for i, name in enumerate(_TIME_STRATEGIES[: upto + 1]):
+        for r in p.q(
+            "SELECT f.Item, f.Value FROM Strategy_Priorities s JOIN AiFavoredItems f ON f.ListType = s.ListType "
+            "WHERE s.StrategyType = ?",
+            f"STRATEGY_{name}_CHANGES",
+        ):
+            values.setdefault(r["Item"], [None] * (upto + 1))[i] = r["Value"] or 0
+    lines = []
+    for item in sorted(values, key=lambda i: p.type_name(i).lower()):
+        now = values[item][upto]
+        if now is None:
+            continue
+        total = sum(v for v in values[item] if v)
+        lines.append(f"{p.type_name(item)}: {_signed(now)} ({p.text('LOC_HUD_CITY_TOTAL')} {_signed(total)})")
+    if lines:
+        page.facts.append(FactGroup(f"{p.text('LOC_BCP_AI')} {p.text('LOC_HUD_REPORTS_PRIORITY')}", lines))
+
+
+def _signed(v) -> str:
+    return f"+{_num(v)}" if v > 0 else _num(v)
+
+
+def rand_agenda(p: Pedia, page: Page) -> None:
+    a = p.get("Agendas", "AgendaType", page.page_id)
+    if a is None:
+        return
+    at = a["AgendaType"]
+    traits = _Box(page, p.loc, "LOC_UI_PEDIA_TRAITS")
+    limit = _col(p.get("RandomAgendas", "AgendaType", at), "GameLimit") or 0
+    if limit > 0:
+        traits.line(f"{p.text('LOC_VISIBILITY_LIMITED_NAME')} {_num(limit)}")
+    if _col(p.get("RandomAgendas_XP2", "AgendaType", at), "RequiresReligion"):
+        traits.line("LOC_UI_RELIGION_TITLE")
+    traits.lines(
+        "LOC_UI_PEDIA_LEADERS",
+        [
+            f"{p.name('Leaders', 'LeaderType', r['LeaderType'])} {_num(r['PercentageChance'])}%"
+            for r in p.q("SELECT * FROM AgendaPreferredLeaders WHERE AgendaType = ?", at)
+        ],
+    )
+    p.description(page, _col(a, "Description"))
+
+
+def unit_ability(p: Pedia, page: Page) -> None:
+    ab = p.get("UnitAbilities", "UnitAbilityType", page.page_id)
+    if ab is None:
+        return
+    at = ab["UnitAbilityType"]
+    usage = _Box(page, p.loc, "LOC_UI_PEDIA_USAGE")
+    sources = (
+        ("PolicyModifiers", "PolicyType", "Policies", "Name", "LOC_POLICY_NAME"),
+        ("BuildingModifiers", "BuildingType", "Buildings", "Name", "LOC_BUILDING_NAME"),
+        ("BeliefModifiers", "BeliefType", "Beliefs", "Name", "LOC_BELIEF_NAME"),
+        ("TraitModifiers", "TraitType", "Traits", "Name", "LOC_UI_PEDIA_TRAITS"),
+        ("GovernmentModifiers", "GovernmentType", "Governments", "Name", "LOC_GOVERNMENT_NAME"),
+        (
+            "CommemorationModifiers",
+            "CommemorationType",
+            "CommemorationTypes",
+            "CategoryDescription",
+            "LOC_PEDIA_CONCEPTS_PAGE_DEDICATIONS_CHAPTER_CONTENT_TITLE",
+        ),
+    )
+    granted = []
+    for r in p.q("SELECT ModifierId FROM ModifierArguments WHERE Name = 'AbilityType' AND Value = ?", at):
+        for link, col, table, name_col, label in sources:
+            owners = [x[0] for x in p.q(f"SELECT {col} FROM {link} WHERE ModifierId = ?", r["ModifierId"])]
+            names = [p.name(table, col, o, name_col) for o in owners]
+            if link == "TraitModifiers":
+                # A civilization's or leader's ability: name its owner, as the player knows it.
+                names = [", ".join(p.unique_to(o)) or n for o, n in zip(owners, names, strict=True)]
+            names = [n for n in names if n and not n.startswith("LOC_")]
+            if names:
+                granted += [f"{n} ({p.text(label)})" for n in names]
+                break
+    usage.lines("LOC_UI_PEDIA_USAGE", _unique(granted))
+    units = []
+    for r in p.q("SELECT Tag FROM TypeTags WHERE Type = ?", at):
+        units += [
+            p.text(u["Name"])
+            for u in p.q("SELECT u.Name FROM TypeTags t JOIN Units u ON u.UnitType = t.Type WHERE t.Tag = ?", r["Tag"])
+        ]
+    usage.lines("LOC_PEDIA_UNITS_TITLE", _sorted_names(units))
+    p.description(page, _col(ab, "Description"))
+
+
+def _era_span(p: Pedia, earliest, latest) -> str:
+    if not earliest and not latest:
+        return ""
+    return f"{p.name('Eras', 'EraType', earliest)} - {p.name('Eras', 'EraType', latest)}".strip(" -")
+
+
+def commemoration(p: Pedia, page: Page) -> None:
+    c = p.get("CommemorationTypes", "CommemorationType", page.page_id)
+    if c is None:
+        return
+    box = _Box(page, p.loc, "LOC_UI_PEDIA_REQUIREMENTS")
+    box.lines("LOC_UI_PEDIA_APPLIES_TO", [_era_span(p, _col(c, "MinimumGameEra"), _col(c, "MaximumGameEra"))])
+    bonuses = [
+        p.text(_col(c, col)) for col in ("GoldenAgeBonusDescription", "NormalAgeBonusDescription", "DarkAgeBonusDescription")
+    ]
+    bonuses = [b for b in bonuses if b]
+    if bonuses:
+        page.chapters.insert(0, Chapter(p.text("LOC_HUD_REPORTS_BONUSES"), bonuses))
+
+
+def alliance(p: Pedia, page: Page) -> None:
+    a = p.get("Alliances", "AllianceType", page.page_id)
+    if a is None:
+        return
+    for r in p.q(
+        "SELECT e.LevelRequirement, s.Text FROM AllianceEffects e LEFT JOIN ModifierStrings s "
+        "ON s.ModifierId = e.ModifierID AND s.Context = 'Summary' WHERE e.AllianceType = ? "
+        "ORDER BY e.LevelRequirement, e.ModifierID",
+        a["AllianceType"],
+    ):
+        heading = p.text("LOC_DIPLOACTION_ALLIANCE_LEVEL", r["LevelRequirement"])
+        if not page.facts or page.facts[-1].heading != heading:
+            page.facts.append(FactGroup(heading))
+        text = p.text(r["Text"])
+        if text:
+            page.facts[-1].lines.append(text)
+
+
+def resolution(p: Pedia, page: Page) -> None:
+    r = p.get("Resolutions", "ResolutionType", page.page_id)
+    if r is None:
+        return
+    box = _Box(page, p.loc, "LOC_OPTIONS")
+    # The World Congress itself labels the two choices with the literals "A" and "B".
+    for letter, col in (("A", "Effect1Description"), ("B", "Effect2Description")):
+        text = p.text(_col(r, col))
+        if text:
+            box.line(f"{letter}: {text}")
+    box.lines("LOC_UI_PEDIA_APPLIES_TO", [_era_span(p, _col(r, "EarliestEra"), _col(r, "LatestEra"))])
+
+
+# Placeholders the game fills in for a live emergency; a Civilopedia page has no live one.
+_EMERGENCY_WORDS = {
+    "{TargetName}": "the Target",
+    "{OldCityName}": "the city",
+    "{1_CityName}": "the city",
+    "{Turns}": "the given number of",
+}
+
+
+def discussion(p: Pedia, page: Page) -> None:
+    d = p.get("Discussions", "DiscussionType", page.page_id)
+    if d is None:
+        return
+    et = _col(d, "EmergencyType")
+    e = p.get("EmergencyAlliances", "EmergencyType", et)
+
+    def text(key) -> str:
+        raw = p.loc.tags.get(key) if isinstance(key, str) else None
+        if raw is None:
+            return p.text(key)
+        for k, v in _EMERGENCY_WORDS.items():
+            raw = raw.replace(k, v)
+        return re.sub(r"(^|[.!?]\s+)the ", lambda m: m.group(1) + "The ", p.text(raw))
+
+    if e is not None:
+        texts = p.get("EmergencyTexts", "Type", _col(e, "EmergencyText"))
+        goals = p.get("EmergencyGoalTexts", "GoalType", _col(e, "GoalText"))
+        box = _Box(page, p.loc, "LOC_TUTORIAL_GOAL_GENERAL_1")
+        for key in (_col(goals, "GoalDescription"), _col(goals, "ListGoal")):
+            box.line(text(key))
+        box.lines("LOC_BCP_TARGET_GOALS", [text(_col(goals, "TargetListGoal"))])
+        box.lines(
+            "LOC_HUD_REPORTS_BONUSES",
+            [text(r["Description"]) for r in p.q("SELECT * FROM EmergencyBuffs WHERE EmergencyType = ?", et)],
+        )
+        box.lines(
+            "LOC_BCP_SCORE_SOURCES",
+            [text(r["Description"]) for r in p.q("SELECT * FROM EmergencyScoreSources WHERE EmergencyType = ?", et)],
+        )
+        rewards = []
+        for r in p.q("SELECT * FROM EmergencyRewards WHERE EmergencyType = ?", et):
+            tier = "1. " if _col(r, "FirstPlace") else "2. " if _col(r, "TopTier") else "3. " if _col(r, "BottomTier") else ""
+            reward = text(r["Description"])
+            if reward:
+                rewards.append(tier + reward)
+        box.lines("LOC_BCP_REWARDS", rewards)
+        details = [t for t in (text(_col(texts, "Description")), text(_col(texts, "ExtraEffects"))) if t]
+        if details:
+            page.chapters.insert(0, Chapter(p.text(_col(e, "Name")), details))
+    for g in page.facts:
+        g.heading = g.heading.rstrip(":")
+    p.description(page, _col(d, "Description"))
+
+
+def overview_moments(p: Pedia, page: Page) -> None:
+    """Every historic moment, grouped by the era score it gives, biggest first."""
+    by_score: dict[int, list[str]] = {}
+    for m in p.q("SELECT * FROM Moments"):
+        name = p.text(m["Name"])
+        if not name or name.startswith("LOC_"):
+            continue
+        line = f"{name}: {p.text(m['Description'])}" if _col(m, "Description") else name
+        span = _era_span(p, _col(m, "MinimumGameEra"), _col(m, "ObsoleteEra") or _col(m, "MaximumGameEra"))
+        if span:
+            line += f" ({span})"
+        by_score.setdefault(_col(m, "EraScore") or 0, []).append(line)
+    for score in sorted(by_score, reverse=True):
+        page.facts.append(FactGroup(p.text("LOC_UI_PEDIA_ERA_SCORE", score), sorted(by_score[score])))
+
+
 def _simple_description(table: str, key_col: str) -> Callable[[Pedia, Page], None]:
     def build(p: Pedia, page: Page) -> None:
         row = p.get(table, key_col, page.page_id)
@@ -1475,10 +2179,15 @@ LAYOUTS: dict[str, Callable[[Pedia, Page], None]] = {
     "Governor": governor,
     "GovernorPromotion": governor_promotion,
     "HistoricMoment": historic_moment,
-    "UnitAbility": _simple_description("UnitAbilities", "UnitAbilityType"),
-    "RandAgenda": _simple_description("Agendas", "AgendaType"),
-    "Alliance": _simple_description("Alliances", "AllianceType"),
-    "Resolution": _simple_description("Resolutions", "ResolutionType"),
-    "Discussion": _simple_description("Discussions", "DiscussionType"),
-    "Religion": _simple_description("Religions", "ReligionType"),
+    "UnitAbility": unit_ability,
+    "RandAgenda": rand_agenda,
+    "Alliance": alliance,
+    "Resolution": resolution,
+    "Discussion": discussion,
+    "Commemoration": commemoration,
+    "TableUnits": table_units,
+    "Adjacencies": adjacencies,
+    "TimeStrategy": time_strategy,
+    "OverviewMoments": overview_moments,
+    "Religion": religion,
 }

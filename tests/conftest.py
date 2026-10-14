@@ -290,6 +290,14 @@ def _gameplay_db(path: Path) -> None:
     db.close()
 
 
+@pytest.fixture(autouse=True)
+def private_dirs(tmp_path_factory, monkeypatch):
+    """Tests never read or write the real index, key, spend ledger or latency log."""
+    home = tmp_path_factory.mktemp("civspeak-home")
+    monkeypatch.setenv("CIVSPEAK_DATA_DIR", str(home / "data"))
+    monkeypatch.setenv("CIVSPEAK_CONFIG_DIR", str(home / "config"))
+
+
 @pytest.fixture
 def fake_game(tmp_path: Path) -> GamePaths:
     game = tmp_path / "steamapps" / "common" / "Game"

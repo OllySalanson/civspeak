@@ -12,6 +12,7 @@ GET  /api/speech/ID/N    sentence N of an answer as WAV (waits until George has 
 POST /api/listen         a recorded question (audio/wav) -> {"text": "...", "seconds": ...}
 GET  /api/talk           text/event-stream of "talk" events ({"key": "down"} or "up") for the page
 POST /api/hotkey         {"key": "down"|"up"} from the Windows helper -> {"listening": true} when a page took it
+POST /api/wake           {} -> starts loading the voice and speech recognizer if they were unloaded while idle
 """
 
 from __future__ import annotations
@@ -38,6 +39,8 @@ from . import index as index_mod
 from . import paths, spend
 from .answer import Answerer, AnswerError, KeyMissing
 from .hearing import BadAudio, Ears
+from .idle import IdleUnloader
+from .latency import LatencyLog
 from .search import Index
 from .speech import Narrator, SentenceSplitter, Voice
 
@@ -55,6 +58,7 @@ MAX_RECORDING = 4_000_000  # bytes: about two minutes of 16 kHz WAV; the page st
 STALE_CHECK_SECONDS = 10
 TALK_PING_SECONDS = 20  # a comment line this often lets a closed page's connection be noticed
 TALK_KEYS = ("down", "up")
+LISTEN_PAIRS_SECONDS = 30  # a spoken question is asked this soon after it was heard
 SPEECH_URL = re.compile(r"^/api/speech/([A-Za-z0-9_-]{6,32})/(\d{1,3})$")
 
 # What George says when there is no answer to read out.
@@ -70,12 +74,23 @@ NOT_HEARD = "Sorry, I didn't catch that."
 class State:
     """The current index, plus a background rebuild when the game's cache or log changes."""
 
-    def __init__(self, index_path: Path, answerer: Answerer, voice: Voice | None = None, ears: Ears | None = None):
+    def __init__(
+        self,
+        index_path: Path,
+        answerer: Answerer,
+        voice: Voice | None = None,
+        ears: Ears | None = None,
+        latency: LatencyLog | None = None,
+    ):
         self.index_path = index_path
         self.answerer = answerer
         self.voice = voice or Voice()
         self.narrator = Narrator(self.voice)
         self.ears = ears or Ears()
+        self.latency = latency or LatencyLog(paths.latency_file())
+        self.unloader = IdleUnloader([self.voice, self.ears], paths.idle_unload_seconds())
+        self.last_listen: dict = {}
+        self._waking = threading.Lock()
         self.lock = threading.Lock()
         self.index: Index | None = None
         self.building = False
@@ -144,15 +159,28 @@ class State:
         }
 
     def warm_up(self) -> None:
-        """Load George and Whisper in the background, so the first question is not slow."""
-        if not self.voice.problem():
-            self.narrator.warm_up()
-        if not self.ears.problem():
-            threading.Thread(target=self._load_ears, daemon=True).start()
+        """Get everything a question needs ready in the background, so the first question is not slow:
+        George and Whisper loaded and run once, and Claude's client library imported (about a second)."""
+        self.wake()
+        threading.Thread(target=self.answerer.warm_up, name="warm-claude", daemon=True).start()
+        self.unloader.start()
 
-    def _load_ears(self) -> None:
+    def wake(self) -> None:
+        """Load George and Whisper again if they were unloaded while idle. Called as soon as the talk
+        key or the microphone is pressed, so they load while the player is still speaking."""
+        if not self._waking.acquire(blocking=False):
+            return  # already waking
         try:
-            self.ears.hint(self.index)
+            if not self.voice.loaded and not self.voice.problem():
+                self.narrator.warm_up()
+            if not self.ears.loaded and not self.ears.problem():
+                threading.Thread(target=self._warm_ears, name="warm-ears", daemon=True).start()
+        finally:
+            self._waking.release()
+
+    def _warm_ears(self) -> None:
+        try:
+            self.ears.warm_up(self.index)
         except RuntimeError as e:
             log.warning("%s", e)
 
@@ -278,7 +306,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/listen":
             self._listen(speak="speak=1" in self.path)
             return
-        if path not in ("/api/ask", "/api/hotkey"):
+        if path not in ("/api/ask", "/api/hotkey", "/api/wake"):
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         # Only accept requests from our own page and helper (blocks other websites posting to localhost).
@@ -287,6 +315,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/hotkey":
             self._hotkey()
+            return
+        if path == "/api/wake":
+            self.state.wake()
+            self._json(HTTPStatus.OK, {"ok": True})
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -322,6 +354,8 @@ class Handler(BaseHTTPRequestHandler):
         if key not in TALK_KEYS:
             self._json(HTTPStatus.BAD_REQUEST, {"error": 'expected {"key": "down"} or {"key": "up"}'})
             return
+        if key == "down":
+            self.state.wake()
         self._json(HTTPStatus.OK, {"listening": self.talk.press(key)})
 
     def _speaker(self, speak: bool) -> Speaker | None:
@@ -347,6 +381,7 @@ class Handler(BaseHTTPRequestHandler):
         if ears.problem():
             self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": ears.problem()})
             return
+        started, cold = time.monotonic(), not ears.loaded
         try:
             heard = ears.transcribe(audio, self.state.index)
         except BadAudio as e:
@@ -355,6 +390,12 @@ class Handler(BaseHTTPRequestHandler):
         except RuntimeError as e:  # the model could not be loaded
             self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(e)})
             return
+        self.state.last_listen = {
+            "at": time.monotonic(),
+            "listen_s": round(time.monotonic() - started, 2),
+            "audio_s": heard.audio_seconds,
+            "ears_cold": cold,
+        }
         reply = {"text": heard.text, "seconds": heard.seconds, "audio_seconds": heard.audio_seconds}
         if not heard.text and speak and not self.state.voice.problem():
             narrator = self.state.narrator
@@ -373,6 +414,20 @@ class Handler(BaseHTTPRequestHandler):
             speaker.say(SPOKEN_PROBLEMS[kind])
 
     def _answer(self, question: str, speaker: Speaker | None, spoken: bool) -> None:
+        timing = {"spoken": spoken, "voice_cold": bool(speaker) and not self.state.voice.loaded}
+        listened = self.state.last_listen
+        if spoken and listened and time.monotonic() - listened["at"] < LISTEN_PAIRS_SECONDS:
+            timing |= {k: v for k, v in listened.items() if k != "at"}
+        received = time.monotonic()
+        try:
+            timing["outcome"] = self._answer_timed(question, speaker, spoken, timing)
+        finally:
+            if speaker:
+                timing["first_voice_s"] = speaker.first_voice_seconds(since=received)
+            timing["total_s"] = round(time.monotonic() - received, 2)
+            self.state.latency.record({k: v for k, v in timing.items() if v is not None})
+
+    def _answer_timed(self, question: str, speaker: Speaker | None, spoken: bool, timing: dict) -> str:
         state = self.state
         state.check()
         idx = state.index
@@ -381,8 +436,10 @@ class Handler(BaseHTTPRequestHandler):
                 state.build_error or "The Civilopedia index is still being built from your game. Try again in a few seconds."
             )
             self._problem("no_index", message, speaker)
-            return
+            return "no_index"
+        searched = time.monotonic()
         hits = idx.search(question, k=6)
+        timing["search_ms"] = round((time.monotonic() - searched) * 1000)
         self._event("entries", [{"score": h.score, **h.page} for h in hits])
         started = time.monotonic()
         try:
@@ -412,12 +469,16 @@ class Handler(BaseHTTPRequestHandler):
                         },
                     )
                     log.info("answered in %.1fs (first text %.1fs), $%.4f", time.monotonic() - started, first or 0, r.cost_usd)
+                    timing["first_text_s"] = round(first or 0, 2)
+                    timing["cost"] = round(r.cost_usd, 5)
+            return "answered"
         except KeyMissing:
             self._problem(
                 "no_key",
                 "No Claude API key is set up yet, so there is no spoken answer. The matching Civilopedia entries are below.",
                 speaker,
             )
+            return "no_key"
         except spend.CapReached as e:
             self._problem(
                 "cap",
@@ -425,8 +486,10 @@ class Handler(BaseHTTPRequestHandler):
                 "Answers start again next month; the Civilopedia entries below still work.",
                 speaker,
             )
+            return "cap"
         except AnswerError as e:
             self._problem("api", str(e), speaker)
+            return "api"
 
 
 class Speaker:
@@ -437,11 +500,27 @@ class Speaker:
         self.event = event
         self.answer_id = secrets.token_urlsafe(9)
         self.splitter = SentenceSplitter()
+        self.first_ready: float | None = None  # when George's first sentence was ready to play
         narrator.start(self.answer_id)
 
     def say(self, sentence: str) -> None:
         n = self.narrator.say(self.answer_id, sentence)
+        if n == 0:
+            clip = self.narrator.clip(self.answer_id, 0)
+            if clip is not None:
+                clip.add_done_callback(lambda f: setattr(self, "first_ready", time.monotonic()))
         self.event("say", {"url": f"/api/speech/{self.answer_id}/{n}", "text": sentence})
+
+    def first_voice_seconds(self, since: float, wait: float = 30) -> float | None:
+        """Seconds from `since` until the first sentence was voiced (waiting for it if need be)."""
+        clip = self.narrator.clip(self.answer_id, 0)
+        if clip is None:
+            return None
+        try:
+            clip.result(timeout=wait)
+        except Exception:  # cancelled by a newer question, or synthesis failed
+            return None
+        return round((self.first_ready or time.monotonic()) - since, 2)
 
     def feed(self, text: str) -> None:
         for sentence in self.splitter.feed(text):
