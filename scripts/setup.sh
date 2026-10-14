@@ -1,7 +1,7 @@
 #!/bin/sh
 # One-time setup: a private Python environment in .venv with civspeak and its voice (Kokoro, Whisper)
-# installed into it, the speech recognition model in the Hugging Face cache, and the repo guard
-# enabled as a pre-commit hook.
+# installed into it, the speech recognition model in the Hugging Face cache, the repo guard enabled
+# as a pre-commit hook, and (in WSL) the Windows helper installed.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -24,6 +24,12 @@ nice -n 10 .venv/bin/python -c "from faster_whisper import WhisperModel as W; W(
 kokoro="${CIVSPEAK_KOKORO_DIR:-$HOME/.local/share/pixel-explainer}"
 if [ ! -f "$kokoro/kokoro-v1.0.onnx" ] || [ ! -f "$kokoro/voices-v1.0.bin" ]; then
   echo "Kokoro voice files not found in $kokoro; answers will be shown but not spoken." >&2
+fi
+
+# The Windows helper: hold ` in Civ to ask, Start menu and desktop shortcuts, the icon by the clock, start at login.
+if [ -n "${WSL_DISTRO_NAME:-}" ]; then
+  .venv/bin/civspeak helper install \
+    || echo "Could not install the Windows helper; run  .venv/bin/civspeak helper install  to try again." >&2
 fi
 
 echo "Ready. Try:  .venv/bin/civspeak ask \"where can I build a campus\""
