@@ -326,6 +326,9 @@ async function startListening(mode) {
     });
     rec.ctx = new AudioContext({ sampleRate: 16000 });
     await rec.ctx.audioWorklet.addModule("/recorder.js");
+    // A page nobody has clicked yet may not use sound (the helper's own window is allowed to).
+    if (rec.ctx.state !== "running") await Promise.race([rec.ctx.resume(), new Promise((r) => setTimeout(r, 300))]);
+    if (rec.ctx.state !== "running") throw Object.assign(new Error("not allowed to start sound yet"), { name: "NeedsClick" });
     if (rec.state !== "starting") throw new Error("cancelled"); // Esc while the mic was starting
     const node = new AudioWorkletNode(rec.ctx, "recorder");
     node.port.onmessage = (ev) => onSamples(ev.data);
@@ -338,7 +341,9 @@ async function startListening(mode) {
     show(statusEl, "");
     show(problemEl, err && err.name === "NotAllowedError"
       ? "The browser is not allowed to use the microphone. Allow it for this page (the icon at the left of the address bar) and try again."
-      : "Could not start the microphone. Is one plugged in?");
+      : err && err.name === "NeedsClick"
+        ? "Click anywhere on this page once so it may use the microphone and sound, then ask again."
+        : "Could not start the microphone. Is one plugged in?");
     return;
   }
   rec.started = rec.lastVoice = performance.now();
@@ -441,19 +446,26 @@ function wav(chunks, rate) {
   return view.buffer;
 }
 
-micButton.addEventListener("pointerdown", (ev) => {
-  if (ev.button !== 0) return;
+// Pressing and letting go of the mic button, the ` key, or ` held in a game (through the Windows
+// helper) all work the same way: hold to talk, or tap to talk until you stop.
+function pressTalk() {
   rec.pressedAt = performance.now();
   if (rec.state === "listening" && rec.mode === "toggle") finishListening();
   else if (rec.state === "idle") startListening("hold");
-});
+}
 
-micButton.addEventListener("pointerup", () => {
+function releaseTalk() {
   if (rec.mode !== "hold" || (rec.state !== "listening" && rec.state !== "starting")) return;
-  if (performance.now() - rec.pressedAt < HOLD_MS) rec.mode = "toggle"; // a click: keep listening
+  if (performance.now() - rec.pressedAt < HOLD_MS) rec.mode = "toggle"; // a tap: keep listening
   else finishListening();
   if (rec.state === "listening") showListening();
+}
+
+micButton.addEventListener("pointerdown", (ev) => {
+  if (ev.button === 0) pressTalk();
 });
+
+micButton.addEventListener("pointerup", releaseTalk);
 
 micButton.addEventListener("keydown", (ev) => {
   // Enter or Space on the focused button behaves like a click.
@@ -486,10 +498,7 @@ document.addEventListener("keydown", (ev) => {
   if (ev.code === "Backquote" && !ev.ctrlKey && !ev.altKey && !ev.metaKey) {
     // Hold ` to talk (tap it to talk until you stop); it never types into the box.
     ev.preventDefault();
-    if (ev.repeat) return;
-    rec.pressedAt = performance.now();
-    if (rec.state === "listening" && rec.mode === "toggle") finishListening();
-    else startListening("hold");
+    if (!ev.repeat) pressTalk();
   } else if (ev.key === "Escape") {
     if (rec.state === "listening" || rec.state === "starting") cancelListening();
     else stopSpeaking();
@@ -503,10 +512,14 @@ document.addEventListener("keydown", (ev) => {
 document.addEventListener("keyup", (ev) => {
   if (ev.code !== "Backquote") return;
   ev.preventDefault();
-  if (rec.mode !== "hold" || (rec.state !== "listening" && rec.state !== "starting")) return;
-  if (performance.now() - rec.pressedAt < HOLD_MS) rec.mode = "toggle";
-  else finishListening();
-  if (rec.state === "listening") showListening();
+  releaseTalk();
+});
+
+// ` held while a game has the focus: the Windows helper tells the server, the server tells us.
+new EventSource("/api/talk").addEventListener("talk", (ev) => {
+  const { key } = JSON.parse(ev.data);
+  if (key === "down") pressTalk();
+  else releaseTalk();
 });
 
 showVoice();

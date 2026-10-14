@@ -8,69 +8,84 @@ Everything comes from **your own installed game**: the rules of the last game yo
 (Gathering Storm, every DLC and your mods such as Better Balanced Game) and the exact text that
 game showed. Nothing from Firaxis or any mod is stored in this repository.
 
-So far: the Civilopedia index and search, the answer page, the microphone and George reading the
-answers out. Next comes a Windows helper so the `` ` `` key works while Civ has the focus.
-
 ## How to use it
 
-All commands run in WSL from this folder.
+### Set it up once
 
-1. **Set up once.**
+This is the only part that needs a terminal (WSL, in this folder), and only once.
+
+1. **Install.**
 
    ```sh
    ./scripts/setup.sh
    ```
 
-   This also installs the voice (Kokoro) and speech recognition (Whisper base.en) and makes sure the
-   Whisper model is in `~/.cache/huggingface`. Both run on this PC; no audio leaves it.
+   This installs everything: the voice (Kokoro) and speech recognition (Whisper base.en), both
+   running on this PC so no audio leaves it, and the **Civspeak helper for Windows**. The helper
+   puts a **Civspeak** icon (a gold star) in the Start menu and on the desktop, sits by the clock,
+   and starts by itself every time you log in. Nothing needs to be clicked or allowed on Windows
+   to install it: no administrator rights, no security prompts.
 
 2. **Load a game in Civ VI once.** Civ writes its rules cache and `Modding.log` whenever a game
-   loads; civspeak reads those. Load a new game (or one with different mods) and civspeak
-   rebuilds its index on its own the next time you ask.
+   loads; Civspeak reads those. Load a new game (or one with different mods) and it rebuilds its
+   index on its own the next time you ask.
 
-3. **Ask from the terminal** (no API key needed; prints the matching entries):
+3. **Allow the microphone, once.** The answer page opens filling your second screen a few seconds
+   after the install. Click the round microphone button on it; Brave asks whether
+   `localhost:8765` may use your microphone: click **Allow**. (It stops listening by itself.)
 
-   ```sh
-   .venv/bin/civspeak ask "where can I build a campus"
-   .venv/bin/civspeak ask --full "what does a ziggurat do"
-   ```
+   That is the only click Windows or Brave ever needs. If the page instead says the microphone is
+   blocked, turn on Windows **Settings > Privacy & security > Microphone > Let desktop apps access
+   your microphone**.
 
-4. **Open the answer page** on your second screen:
+4. **Optional: keep the star by the clock.** Windows 11 puts new icons under the **^** arrow next
+   to the clock. To keep Civspeak's star in view, drag it from there onto the taskbar.
 
-   ```sh
-   .venv/bin/civspeak serve --open
-   ```
+### Every day, no terminal
 
-   This opens `http://localhost:8765` as a Brave app window; drag it to the second screen. Stop the
-   server with Ctrl+C.
+- **Log in.** Civspeak starts by itself and the answer page opens on your second screen.
+- **In Civ, hold `` ` ``** (the key under Esc), ask your question, and let go. For example "where
+  can I build a Mbanza?". George reads out a short answer and the Civilopedia entries appear on
+  the second screen. A quick tap of `` ` `` instead listens until you stop talking.
+  - Civ never sees the key and keeps the focus: you stay in the game. The key is only taken while
+    Civ has the focus, so `` ` `` types normally everywhere else.
+  - If you hear a Windows "ding" instead, Civspeak is not ready: it is still starting, or its
+    page was closed. A closed page comes back as soon as you leave the game (Alt+Tab).
+- **Open the page** if you closed it: double-click **Civspeak** on the desktop or in the Start
+  menu, or click the star by the clock and choose **Open the answer page**. (If Civspeak was turned
+  off, the shortcut starts it again.)
+- **Turn it off:** click the star by the clock and choose **Turn off Civspeak**. That stops
+  everything (the page closes) until you log in again or open the shortcut.
+- **Stop it starting at login:** click the star and untick **Start when I log in** (or turn
+  Civspeak off in Task Manager > Startup apps, where it is listed as "Python"). To remove it
+  completely, run `.venv/bin/civspeak helper uninstall` in WSL.
 
-5. **Ask out loud.** Click the microphone button and ask, for example "where can I build a
-   Mbanza?". It stops listening by itself when you stop talking. The first time, Brave asks
-   whether the page may use the microphone: choose **Allow**.
+### On the answer page
 
-   George (Kokoro's `bm_george` voice at 0.92 speed) reads out a one to three sentence answer
-   written by Claude Opus 5.5 from the matched entries only, starting as soon as the first sentence
-   is written. The entry cards appear underneath (the ones the answer used are marked), and what
-   it heard you say is in the question box.
+George (Kokoro's `bm_george` voice at 0.92 speed) reads out a one to three sentence answer
+written by Claude Opus 5.5 from the matched entries only, starting as soon as the first sentence
+is written. The entry cards appear underneath (the ones the answer used are marked), and what it
+heard you say is in the question box.
 
-   - **Hold to talk:** hold the microphone button, or hold `` ` `` (the key under Esc) while the
-     page has the focus, and let go when you're done. A quick tap of either listens until you stop
-     talking.
-   - **Esc** stops George mid-answer (or cancels listening). Asking a new question also stops him.
-   - **Voice on / Voice off** (top right) turns the spoken answers off and on; the page remembers.
-   - You can still type a question and press Enter; the answer is spoken too. Press `/` to jump to
-     the question box.
-   - If it mishears a name, the search still tries names that sound alike ("embancer" finds
-     Mbanza), and Claude is told the question was spoken. If it still gets it wrong, ask again or
-     type it.
+- **Click the microphone** and ask; it stops listening by itself when you stop talking. Or hold
+  the microphone button, or hold `` ` `` while the page has the focus, and let go when you're done.
+- **Esc** stops George mid-answer (or cancels listening). Asking a new question also stops him.
+- **Voice on / Voice off** (top right) turns the spoken answers off and on; the page remembers.
+- You can still type a question and press Enter; the answer is spoken too. Press `/` to jump to
+  the question box.
+- If it mishears a name, the search still tries names that sound alike ("embancer" finds
+  Mbanza), and Claude is told the question was spoken. If it still gets it wrong, ask again or
+  type it.
 
-6. **Check things at any time:**
+### From the terminal (optional)
 
-   ```sh
-   .venv/bin/civspeak status
-   ```
-
-   shows the game it was built from, whether the API key is present and this month's spend.
+```sh
+.venv/bin/civspeak ask "where can I build a campus"      # the matching entries, no API key needed
+.venv/bin/civspeak ask --full "what does a ziggurat do"
+.venv/bin/civspeak serve --open    # the page without the helper (opens in your usual Brave); Ctrl+C stops it
+.venv/bin/civspeak status          # the game it was built from, whether the API key is present, this month's spend
+.venv/bin/civspeak helper status   # whether the Windows helper is running and starts at login
+```
 
 ### The API key and the spend cap
 
@@ -94,6 +109,7 @@ All commands run in WSL from this folder.
 | George's voice (Kokoro model) | `~/.local/share/pixel-explainer/kokoro-v1.0.onnx` and `voices-v1.0.bin`; override with `CIVSPEAK_KOKORO_DIR` |
 | Speech recognition model | `~/.cache/huggingface` (Whisper `base.en`); `CIVSPEAK_WHISPER_MODEL=small.en` tries the bigger one |
 | Game cache and logs | `%LOCALAPPDATA%\Firaxis Games\Sid Meier's Civilization VI`; override with `CIVSPEAK_USER_DIR` |
+| The Windows helper | `%LOCALAPPDATA%\Civspeak`: the helper, its `config.json`, the page's own Brave profile, `server.log` and `helper.log` |
 
 ## How it works
 
@@ -116,9 +132,22 @@ All commands run in WSL from this folder.
 - **Speaking:** the answer is cut into sentences as Claude writes it (a long first sentence at its
   first comma), each is voiced by Kokoro as soon as it is complete, and the page plays them back to
   back. So George starts while Claude is still writing.
+- **Talking in the game:** the Windows helper (`src/civspeak/winhelper.py`, run by Windows' own
+  Python, standard library only) watches which window has the focus. While it is Civ VI, it
+  takes the `` ` `` key with Windows' `RegisterHotKey`, so the key press goes to the helper and
+  never to the game, and the game keeps the focus. Windows reports only the press, so while the
+  key is held the helper checks it every 20 ms (`GetAsyncKeyState`) to catch the release. It
+  passes "down" and "up" to the server, which hands them to the open page over `/api/talk`; the
+  page records exactly as if you held its own microphone button. A low-level keyboard hook could
+  see the release directly, but every key you type in the game would pass through it; the hotkey
+  touches nothing else. The helper starts the server with `wsl.exe` and stops it by closing its
+  input (or, if the helper ever crashes, Windows ends it). The page runs in its own Brave profile
+  so it may start the microphone and George's voice without a click on the page, and stays
+  fully awake while the game has the focus.
 - **Staying light:** Whisper and Kokoro are loaded once when the server starts (about 1 GB of
   memory together), use at most 4 CPU threads each, and the server runs at low priority (`nice`).
-  Nothing runs between questions.
+  Nothing runs between questions. The Windows helper sleeps until the focused window changes or
+  the key is pressed: no CPU while idle (measured 0 ms over 10 s) and about 25 MB of memory.
 
 ## Development
 

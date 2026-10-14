@@ -10,6 +10,8 @@ POST /api/ask            {"question": "...", "speak": true, "spoken": false} -> 
                            problem  why there is no answer (no key, monthly limit, API error)
 GET  /api/speech/ID/N    sentence N of an answer as WAV (waits until George has said it)
 POST /api/listen         a recorded question (audio/wav) -> {"text": "...", "seconds": ...}
+GET  /api/talk           text/event-stream of "talk" events ({"key": "down"} or "up") for the page
+POST /api/hotkey         {"key": "down"|"up"} from the Windows helper -> {"listening": true} when a page took it
 """
 
 from __future__ import annotations
@@ -17,8 +19,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import re
 import secrets
+import select
+import socket
 import subprocess
 import sys
 import threading
@@ -48,6 +53,8 @@ STATIC = {
 MAX_QUESTION = 500
 MAX_RECORDING = 4_000_000  # bytes: about two minutes of 16 kHz WAV; the page stops at 15 seconds
 STALE_CHECK_SECONDS = 10
+TALK_PING_SECONDS = 20  # a comment line this often lets a closed page's connection be noticed
+TALK_KEYS = ("down", "up")
 SPEECH_URL = re.compile(r"^/api/speech/([A-Za-z0-9_-]{6,32})/(\d{1,3})$")
 
 # What George says when there is no answer to read out.
@@ -150,9 +157,51 @@ class State:
             log.warning("%s", e)
 
 
+class Talk:
+    """Hold-to-talk presses from the Windows helper, passed to the page that opened most recently.
+
+    Only one page listens, so a second open page never records (and pays for) the same question.
+    """
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.pages: list[tuple[queue.SimpleQueue, socket.socket]] = []
+
+    def join(self, conn: socket.socket) -> queue.SimpleQueue:
+        q: queue.SimpleQueue = queue.SimpleQueue()
+        with self.lock:
+            self.pages.append((q, conn))
+        return q
+
+    def leave(self, q: queue.SimpleQueue) -> None:
+        with self.lock:
+            self.pages = [p for p in self.pages if p[0] is not q]
+
+    def press(self, key: str) -> bool:
+        """Hand a key change to the newest page that is still connected; False if there is none."""
+        with self.lock:
+            while self.pages:
+                q, conn = self.pages[-1]
+                if not _closed(conn):
+                    q.put(key)
+                    return True
+                self.pages.pop()
+        return False
+
+
+def _closed(conn: socket.socket) -> bool:
+    """Whether the page at the other end has gone (an event stream's page never sends anything)."""
+    try:
+        readable, _, _ = select.select([conn], [], [], 0)
+        return bool(readable) and conn.recv(1, socket.MSG_PEEK) == b""
+    except (OSError, ValueError):
+        return True
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "civspeak"
     state: State  # set by serve()
+    talk: Talk  # set by serve()
 
     def log_message(self, fmt, *args):  # keep the terminal quiet; never logs bodies
         log.info("%s %s", self.address_string(), fmt % args)
@@ -177,6 +226,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.OK, body, ctype)
         elif path == "/api/status":
             self._json(HTTPStatus.OK, self.state.status())
+        elif path == "/api/talk":
+            self._talk_stream()
         elif m := SPEECH_URL.match(path):
             self._speech(m.group(1), int(m.group(2)))
         else:
@@ -198,16 +249,44 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(HTTPStatus.OK, wav, "audio/wav")
 
+    def _talk_stream(self) -> None:
+        """The page listens here for the ` key held in a game (see the Windows helper)."""
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        q = self.talk.join(self.connection)
+        try:
+            self.wfile.write(b"retry: 2000\n\n")
+            self.wfile.flush()
+            while True:
+                try:
+                    key = q.get(timeout=TALK_PING_SECONDS)
+                except queue.Empty:
+                    self.wfile.write(b": ping\n\n")
+                else:
+                    self.wfile.write(f"event: talk\ndata: {json.dumps({'key': key})}\n\n".encode())
+                self.wfile.flush()
+        except OSError:
+            pass  # the page closed or reloaded
+        finally:
+            self.talk.leave(q)
+            self.close_connection = True
+
     def do_POST(self):
-        if self.path.split("?", 1)[0] == "/api/listen":
+        path = self.path.split("?", 1)[0]
+        if path == "/api/listen":
             self._listen(speak="speak=1" in self.path)
             return
-        if self.path != "/api/ask":
+        if path not in ("/api/ask", "/api/hotkey"):
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
-        # Only accept requests from our own page (blocks other websites posting to localhost).
+        # Only accept requests from our own page and helper (blocks other websites posting to localhost).
         if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
             self._json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": "expected JSON"})
+            return
+        if path == "/api/hotkey":
+            self._hotkey()
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -233,6 +312,17 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             if speaker:
                 speaker.cancel()
+
+    def _hotkey(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            key = json.loads(self.rfile.read(min(length, 1000)) or b"{}").get("key")
+        except (ValueError, json.JSONDecodeError, AttributeError):
+            key = None
+        if key not in TALK_KEYS:
+            self._json(HTTPStatus.BAD_REQUEST, {"error": 'expected {"key": "down"} or {"key": "up"}'})
+            return
+        self._json(HTTPStatus.OK, {"listening": self.talk.press(key)})
 
     def _speaker(self, speak: bool) -> Speaker | None:
         """Someone to voice this answer, if the page wants it spoken and George is available."""
@@ -365,12 +455,13 @@ class Speaker:
         self.narrator.cancel(self.answer_id)
 
 
-def serve(port: int = 8765, open_browser: bool = False, host: str = "127.0.0.1") -> int:
+def serve(port: int = 8765, open_browser: bool = False, host: str = "127.0.0.1", watch_stdin: bool = False) -> int:
     answerer = Answerer()
     state = State(paths.index_file(), answerer)
     state.check()
     state.warm_up()
     Handler.state = state
+    Handler.talk = Talk()
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.daemon_threads = True
     url = f"http://localhost:{port}"
@@ -379,6 +470,8 @@ def serve(port: int = 8765, open_browser: bool = False, host: str = "127.0.0.1")
         print("Building the Civilopedia index from your game in the background...", flush=True)
     if open_browser:
         open_page(url)
+    if watch_stdin:
+        threading.Thread(target=_stop_when_stdin_closes, args=(httpd,), daemon=True).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -386,6 +479,14 @@ def serve(port: int = 8765, open_browser: bool = False, host: str = "127.0.0.1")
     finally:
         httpd.server_close()
     return 0
+
+
+def _stop_when_stdin_closes(httpd: ThreadingHTTPServer) -> None:
+    # The Windows helper holds our standard input open; when it turns Civspeak off (or goes away), stop.
+    while sys.stdin.buffer.read(4096):
+        pass
+    print("Stopping: the Windows helper closed.", flush=True)
+    httpd.shutdown()
 
 
 BRAVE = [

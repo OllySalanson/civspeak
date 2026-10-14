@@ -135,8 +135,9 @@ def running(built_index, tmp_path, key_file):
     def start(answerer):
         state = server.State(out, answerer)
         state.check = lambda: None
-        handler = type("H", (server.Handler,), {"state": state})
+        handler = type("H", (server.Handler,), {"state": state, "talk": server.Talk()})
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        httpd.daemon_threads = True  # open event streams must not hold up shutdown
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
 
