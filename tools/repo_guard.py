@@ -44,6 +44,8 @@ FORBIDDEN_SUFFIXES = {
     ".ogg",
     ".webm",
     ".flac",
+    # An index build still being written (index-building-<pid>.sqlite.part).
+    ".part",
 }
 FORBIDDEN_NAMES = {"anthropic-key", ".env", "spend.jsonl", "index.sqlite"}
 # The only file allowed to hold game-style text rows: the invented mini game for tests.
@@ -80,7 +82,7 @@ def index_sentences(index: Path) -> set[str]:
     """Sentences of the player's built Civilopedia (only on a PC where it was built)."""
     if not index.is_file():
         return set()
-    db = sqlite3.connect(f"file:{index}?mode=ro", uri=True)
+    db = sqlite3.connect(index.resolve().as_uri() + "?mode=ro", uri=True)
     try:
         out = set()
         for (text,) in db.execute("SELECT text FROM pages"):
@@ -96,8 +98,11 @@ def index_sentences(index: Path) -> set[str]:
 
 
 def default_index() -> Path:
+    """The newest index civspeak built on this PC (index-<n>.sqlite; index.sqlite before that)."""
     base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
-    return Path(os.environ.get("CIVSPEAK_DATA_DIR") or os.path.join(base, "civspeak")) / "index.sqlite"
+    folder = Path(os.environ.get("CIVSPEAK_DATA_DIR") or os.path.join(base, "civspeak"))
+    numbered = [(int(p.stem[6:]), p) for p in folder.glob("index-*.sqlite") if p.stem[6:].isdigit()]
+    return max(numbered)[1] if numbered else folder / "index.sqlite"
 
 
 def check(root: Path, paths: list[str], sentences: set[str], read=None) -> list[str]:

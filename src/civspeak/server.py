@@ -25,6 +25,7 @@ import re
 import secrets
 import select
 import socket
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -36,7 +37,7 @@ from importlib import resources
 from pathlib import Path
 
 from . import index as index_mod
-from . import paths, spend
+from . import paths, spend, system
 from .answer import Answerer, AnswerError, KeyMissing
 from .hearing import BadAudio, Ears
 from .idle import IdleUnloader
@@ -76,13 +77,13 @@ class State:
 
     def __init__(
         self,
-        index_path: Path,
+        index_dir: Path,
         answerer: Answerer,
         voice: Voice | None = None,
         ears: Ears | None = None,
         latency: LatencyLog | None = None,
     ):
-        self.index_path = index_path
+        self.index_dir = index_dir
         self.answerer = answerer
         self.voice = voice or Voice()
         self.narrator = Narrator(self.voice)
@@ -95,18 +96,34 @@ class State:
         self.index: Index | None = None
         self.building = False
         self.build_error = ""
+        self.game_language = ""  # the game's text language from AppOptions.txt (Civspeak builds English)
         self._last_check = 0.0
-        if index_path.exists():
-            self.index = Index(index_path)
+        self._checking = threading.Lock()
+        current = index_mod.current(index_dir)
+        if current is not None:
+            self._use(current)
 
     def check(self) -> None:
+        # One request at a time looks: two would open (and later close) the same new index twice.
+        if not self._checking.acquire(blocking=False):
+            return
+        try:
+            self._check()
+        finally:
+            self._checking.release()
+
+    def _check(self) -> None:
         now = time.monotonic()
         if self.building or now - self._last_check < STALE_CHECK_SECONDS and self.index is not None:
             return
         self._last_check = now
+        current = index_mod.current(self.index_dir)
+        if current is not None and (self.index is None or self.index.path != current):
+            self._use(current)  # built by `civspeak build` while this server was running
         try:
             game = paths.discover()
-            stale = index_mod.is_stale(self.index_path, game)
+            self.game_language = game.display_language
+            stale = index_mod.is_stale(current, game)
         except paths.SetupError as e:
             self.build_error = str(e)
             return
@@ -118,24 +135,36 @@ class State:
         try:
             # A separate low-priority process, so the build never competes with the game.
             proc = subprocess.run(
-                [sys.executable, "-m", "civspeak", "build"],
+                system.civspeak_command("build"),
                 capture_output=True,
                 text=True,
                 timeout=600,
+                **system.background_process_options(),
             )
             if proc.returncode != 0:
                 self.build_error = (proc.stderr.strip().splitlines() or ["Index build failed."])[-1]
                 return
             self.build_error = ""
-            fresh = Index(self.index_path)
-            with self.lock:
-                old, self.index = self.index, fresh
-            if old is not None:
-                old.close()
+            current = index_mod.current(self.index_dir)
+            if current is not None:
+                self._use(current)
         except (OSError, subprocess.SubprocessError) as e:
             self.build_error = f"Index build failed: {e}"
         finally:
             self.building = False
+
+    def _use(self, path: Path) -> None:
+        """Switch to the index at path, then remove the old one (Windows lets it go only once it is closed)."""
+        try:
+            fresh = Index(path)
+        except sqlite3.Error as e:
+            self.build_error = f"The Civilopedia index could not be opened: {e}"
+            return
+        with self.lock:
+            old, self.index = self.index, fresh
+        if old is not None:
+            old.close()
+        index_mod.remove_old(self.index_dir)
 
     def status(self) -> dict:
         self.check()
@@ -151,6 +180,7 @@ class State:
             "mods": len(json.loads(meta.get("mods", "[]"))) if meta else 0,
             "building": self.building,
             "build_error": self.build_error,
+            "game_language": self.game_language,
             "key": key.exists() and key.stat().st_size > 0,
             "spent": round(ledger.month_total(), 4),
             "cap": ledger.cap,
@@ -536,7 +566,7 @@ class Speaker:
 
 def serve(port: int = 8765, open_browser: bool = False, host: str = "127.0.0.1", watch_stdin: bool = False) -> int:
     answerer = Answerer()
-    state = State(paths.index_file(), answerer)
+    state = State(paths.data_dir(), answerer)
     state.check()
     state.warm_up()
     Handler.state = state
@@ -574,13 +604,23 @@ BRAVE = [
 ]
 
 
+def _brave_paths() -> list[str]:
+    if not system.IS_WINDOWS:
+        return BRAVE
+    folders = [os.environ.get(v) for v in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA")]
+    return [os.path.join(f, "BraveSoftware", "Brave-Browser", "Application", "brave.exe") for f in folders if f]
+
+
 def open_page(url: str) -> None:
     """Open the page as a Brave app window on Windows, or the default browser if Brave is missing."""
-    for exe in BRAVE:
+    for exe in _brave_paths():
         if os.path.exists(exe):
             subprocess.Popen([exe, f"--app={url}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return
     try:
-        subprocess.Popen(["cmd.exe", "/c", "start", "", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if system.IS_WINDOWS:
+            os.startfile(url)  # the player's default browser
+        else:
+            subprocess.Popen(["cmd.exe", "/c", "start", "", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError:
         print(f"Open {url} in your browser.")

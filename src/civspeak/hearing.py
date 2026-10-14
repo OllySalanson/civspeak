@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import re
 import threading
 import time
@@ -163,10 +164,13 @@ class Ears:
                 self.model_name, device="cpu", compute_type="int8", cpu_threads=self.threads, local_files_only=True
             )
         except Exception as e:  # missing from the cache, or a broken download
-            self.error = (
-                f"The Whisper {self.model_name} model is not in ~/.cache/huggingface, "
-                "so the microphone is off. Run ./scripts/setup.sh to fetch it."
-            )
+            if os.path.sep in self.model_name or "/" in self.model_name:
+                self.error = f"The speech recognition model was not found in {self.model_name}, so the microphone is off."
+            else:
+                self.error = (
+                    f"The Whisper {self.model_name} model is not in ~/.cache/huggingface, "
+                    "so the microphone is off. Run ./scripts/setup.sh to fetch it."
+                )
             raise RuntimeError(self.error) from e
         log.info("speech recognition loaded in %.1fs", time.monotonic() - started)
 

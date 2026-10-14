@@ -17,6 +17,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .paths import sqlite_uri
 from .phonetic import ascii_fold, phrase_key
 
 STOPWORDS = set(
@@ -83,7 +84,7 @@ class _Name:
 class Index:
     def __init__(self, path: Path):
         self.path = path
-        self.db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
+        self.db = sqlite3.connect(sqlite_uri(path), uri=True, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.meta = dict((r["key"], r["value"]) for r in self.db.execute("SELECT key, value FROM meta"))
         self.sections = dict(self.db.execute("SELECT id, section_id FROM pages").fetchall())

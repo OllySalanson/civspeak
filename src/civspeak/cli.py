@@ -11,28 +11,22 @@ import textwrap
 import time
 from pathlib import Path
 
-from . import paths
-
-
-def _nice() -> None:
-    # The index build shares the PC with the game: always run it at low priority.
-    try:
-        os.nice(10)
-    except OSError:
-        pass
+from . import paths, system
 
 
 def ensure_index(force: bool = False, quiet: bool = False) -> Path:
     """Build or refresh the index when the game's cache or log changed since the last build."""
     from . import index
 
-    out = paths.index_file()
+    out = index.current()
     game = paths.discover()
     if force or index.is_stale(out, game):
         if not quiet:
             print("Building the Civilopedia index from your game (low priority)...", file=sys.stderr)
-        _nice()
-        report = index.build(game, out)
+        # The index build shares the PC with the game: always run it at low priority.
+        system.lower_priority()
+        report = index.build(game)
+        out = report.index
         if not quiet:
             print(
                 f"Indexed {report.pages} pages from {report.text_files} text files "
@@ -88,7 +82,7 @@ def cmd_serve(args) -> int:
     from .server import serve
 
     # Speech recognition and the voice run in this process: keep them below everything else.
-    _nice()
+    system.lower_priority()
     return serve(port=args.port, open_browser=args.open, watch_stdin=args.watch_stdin)
 
 
@@ -107,13 +101,16 @@ def cmd_helper(args) -> int:
 def cmd_status(args) -> int:
     from . import index, latency, spend
 
-    out = paths.index_file()
-    print(f"Index:      {out}")
+    out = index.current()
+    print(f"Index:      {out or f'not built yet (it goes in {paths.data_dir()})'}")
     try:
         game = paths.discover()
         print(f"Game:       {game.game_dir}")
         print(f"Game cache: {game.gameplay_db}")
-        if out.exists():
+        language = game.display_language
+        if language and not language.lower().startswith("en"):
+            print(f"Language:   the game shows {language}; Civspeak uses the English text and names")
+        if out is not None:
             meta = index.read_meta(out)
             loaded = time.strftime("%d %b %H:%M", time.localtime(float(meta["game_loaded_at"])))
             print(f"Built from the game you loaded at {loaded}; up to date: {not index.is_stale(out, game)}")
@@ -156,6 +153,14 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("status", help="show where things are, index age and this month's spend")
     p.set_defaults(func=cmd_status)
 
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["--build"]:
+        argv = ["build", *argv[1:]]  # how the packaged app (Civspeak.exe --build) rebuilds the index
+    if system.IS_WINDOWS:
+        # A Windows console or pipe may not take every character of a Civilopedia page.
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(errors="replace")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.WARNING if args.verbose else logging.ERROR, format="%(message)s")
     try:

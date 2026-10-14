@@ -6,14 +6,16 @@ settled with the real cost from the API's usage numbers. A reservation that neve
 (crash, network loss mid-answer) keeps counting at its worst-case value, so the cap can never be
 exceeded by accident.
 
-The ledger is an append-only JSON-lines file in ~/.local/share/civspeak/spend.jsonl.
+The ledger is an append-only JSON-lines file, spend.jsonl in civspeak's data folder. Every read and
+write holds a lock on it, so separate processes (the page's server, `civspeak status`) never
+interleave: flock on Linux, a lock on the file's first byte on Windows.
 """
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
+import sys
 import threading
 import time
 import uuid
@@ -59,6 +61,37 @@ def worst_case_usd(input_tokens: int, max_output_tokens: int) -> float:
     return (input_tokens * max(p_in, p_write) + max_output_tokens * p_out) / 1_000_000
 
 
+@contextmanager
+def locked_file(f):
+    """Hold an exclusive lock on an open file, waiting for any other process that has it."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        # Lock byte 0 (Windows allows locking past the end of an empty file). LK_LOCK itself retries
+        # for about 10 seconds; the lock is only ever held for a moment, so keep waiting.
+        f.seek(0)
+        while True:
+            try:
+                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+                break
+            except OSError:
+                continue
+        try:
+            yield
+        finally:
+            f.flush()
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
 class Ledger:
     _lock = threading.Lock()
 
@@ -71,11 +104,8 @@ class Ledger:
     def _locked(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, open(self.path, "a+", encoding="utf-8") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            try:
+            with locked_file(f):
                 yield f
-            finally:
-                fcntl.flock(f, fcntl.LOCK_UN)
 
     @staticmethod
     def _entries(f) -> list[dict]:
