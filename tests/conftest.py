@@ -27,6 +27,10 @@ BASE_TEXT = """<?xml version="1.0" encoding="utf-8"?>
     <Row Tag="LOC_DISTRICT_WATERWORKS_DESCRIPTION"><Text>A pretend district built beside the sea.</Text></Row>
     <Row Tag="LOC_DISTRICT_HANZEL_NAME"><Text>Hanzel</Text></Row>
     <Row Tag="LOC_DISTRICT_HANZEL_DESCRIPTION"><Text>An imaginary trading quarter.</Text></Row>
+    <Row Tag="LOC_DISTRICT_MBOLO_NAME"><Text>Mbolo</Text></Row>
+    <Row Tag="LOC_DISTRICT_MBOLO_DESCRIPTION"><Text>A pretend riverside market.</Text></Row>
+    <Row Tag="LOC_DISTRICT_EMBOLDEN_NAME"><Text>Ambrel</Text></Row>
+    <Row Tag="LOC_DISTRICT_EMBOLDEN_DESCRIPTION"><Text>A made-up hall of courage.</Text></Row>
     <Row Tag="LOC_BUILDING_MOON_GARDEN_NAME"><Text>Moon Garden</Text></Row>
     <Row Tag="LOC_BUILDING_MOON_GARDEN_DESCRIPTION"><Text>Old description that a mod replaces.</Text></Row>
     <Row Tag="LOC_MOMENT_FIRST_THINKERY_NAME"><Text>First Thinkery Finished</Text></Row>
@@ -266,6 +270,8 @@ def _gameplay_db(path: Path) -> None:
             ),
             ("DISTRICT_WATERWORKS", "LOC_DISTRICT_WATERWORKS_NAME", "LOC_DISTRICT_WATERWORKS_DESCRIPTION", None, 30, 0, 1, 0, 2),
             ("DISTRICT_HANZEL", "LOC_DISTRICT_HANZEL_NAME", "LOC_DISTRICT_HANZEL_DESCRIPTION", None, 40, 0, 0, 0, 0),
+            ("DISTRICT_MBOLO", "LOC_DISTRICT_MBOLO_NAME", "LOC_DISTRICT_MBOLO_DESCRIPTION", None, 40, 0, 0, 0, 0),
+            ("DISTRICT_EMBOLDEN", "LOC_DISTRICT_EMBOLDEN_NAME", "LOC_DISTRICT_EMBOLDEN_DESCRIPTION", None, 40, 0, 0, 0, 0),
         ],
     )
     db.execute("INSERT INTO District_ValidTerrains VALUES ('DISTRICT_THINKERY','TERRAIN_MEADOW')")
@@ -288,6 +294,14 @@ def _gameplay_db(path: Path) -> None:
     db.execute("INSERT INTO Moments VALUES ('MOMENT_FIRST_THINKERY','LOC_MOMENT_FIRST_THINKERY_NAME',NULL,3,2)")
     db.commit()
     db.close()
+
+
+@pytest.fixture(autouse=True)
+def private_dirs(tmp_path_factory, monkeypatch):
+    """Tests never read or write the real index, key, spend ledger or latency log."""
+    home = tmp_path_factory.mktemp("civspeak-home")
+    monkeypatch.setenv("CIVSPEAK_DATA_DIR", str(home / "data"))
+    monkeypatch.setenv("CIVSPEAK_CONFIG_DIR", str(home / "config"))
 
 
 @pytest.fixture

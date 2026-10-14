@@ -24,7 +24,6 @@ from . import paths
 
 log = logging.getLogger(__name__)
 
-THREADS = 4
 SAMPLE_RATE = 16000
 # Whisper's decoder holds 448 tokens. faster-whisper gives the hint two slots of up to 223 tokens
 # each (the "hotwords" and the prompt); together they keep well clear of the limit, leaving room
@@ -109,16 +108,18 @@ class Heard:
 
 
 class Ears:
-    """faster-whisper, loaded once (from the local Hugging Face cache only) and kept loaded."""
+    """faster-whisper (from the local Hugging Face cache only), loaded on first use or by warm-up and
+    kept until it has been idle a while (see idle.py)."""
 
-    def __init__(self, model: str | None = None, threads: int = THREADS):
+    def __init__(self, model: str | None = None, threads: int | None = None):
         self.model_name = model or paths.whisper_model()
-        self.threads = threads
+        self.threads = threads or paths.cpu_threads()
         self._model = None
         self._lock = threading.Lock()
         self._hint_for: object = None
         self._hint = ("", "")
         self.error = ""
+        self.last_used = time.monotonic()
 
     def problem(self) -> str:
         """Why the microphone cannot be used on this PC, or "" if it can."""
@@ -135,32 +136,45 @@ class Ears:
         return self._model is not None
 
     def load(self) -> None:
-        with self._lock:
-            if self._model is not None:
-                return
-            problem = self.problem()
-            if problem:
-                raise RuntimeError(problem)
-            from faster_whisper import WhisperModel
+        self._acquire()
 
-            started = time.monotonic()
-            try:
-                self._model = WhisperModel(
-                    self.model_name, device="cpu", compute_type="int8", cpu_threads=self.threads, local_files_only=True
-                )
-            except Exception as e:  # missing from the cache, or a broken download
-                self.error = (
-                    f"The Whisper {self.model_name} model is not in ~/.cache/huggingface, "
-                    "so the microphone is off. Run ./scripts/setup.sh to fetch it."
-                )
-                raise RuntimeError(self.error) from e
-            log.info("speech recognition loaded in %.1fs", time.monotonic() - started)
+    def unload(self) -> bool:
+        with self._lock:
+            loaded, self._model = self._model is not None, None
+        return loaded
+
+    def _acquire(self):
+        """The loaded model (loading it if needed), taken under the lock so an idle unload cannot race it."""
+        with self._lock:
+            self.last_used = time.monotonic()
+            if self._model is None:
+                self._load_locked()
+            return self._model
+
+    def _load_locked(self) -> None:
+        problem = self.problem()
+        if problem:
+            raise RuntimeError(problem)
+        from faster_whisper import WhisperModel
+
+        started = time.monotonic()
+        try:
+            self._model = WhisperModel(
+                self.model_name, device="cpu", compute_type="int8", cpu_threads=self.threads, local_files_only=True
+            )
+        except Exception as e:  # missing from the cache, or a broken download
+            self.error = (
+                f"The Whisper {self.model_name} model is not in ~/.cache/huggingface, "
+                "so the microphone is off. Run ./scripts/setup.sh to fetch it."
+            )
+            raise RuntimeError(self.error) from e
+        log.info("speech recognition loaded in %.1fs", time.monotonic() - started)
 
     def hint(self, index) -> tuple[str, str]:
         """The Civ name hint lists for this index (rebuilt when the index is replaced)."""
-        self.load()
+        model = self._acquire()
         if index is not None and self._hint_for is not index:
-            tok = self._model.hf_tokenizer
+            tok = model.hf_tokenizer
             self._hint = hint_texts(index.name_list(), lambda s: len(tok.encode(s, add_special_tokens=False).ids))
             self._hint_for = index
         return self._hint
@@ -169,8 +183,9 @@ class Ears:
         """Text of a recording, sent by the page as a mono 16-bit WAV."""
         samples = read_wav(wav)
         hotwords, prompt = self.hint(index)
+        model = self._acquire()
         started = time.monotonic()
-        segments, info = self._model.transcribe(
+        segments, info = model.transcribe(
             samples,
             language="en",
             beam_size=5,
@@ -182,8 +197,18 @@ class Ears:
         )
         text = " ".join(s.text.strip() for s in segments).strip()
         took = time.monotonic() - started
+        self.last_used = time.monotonic()
         log.info("heard %.1fs of audio in %.1fs", info.duration, took)
         return Heard(clean_transcript(text), round(took, 2), round(info.duration, 2))
+
+    def warm_up(self, index=None) -> None:
+        """Load the model and the hint list, and run it once: the first transcription is the slowest."""
+        self.hint(index)
+        import numpy as np
+
+        quiet = (np.random.default_rng(0).standard_normal(SAMPLE_RATE) * 0.001).astype(np.float32)
+        segments, _ = self._acquire().transcribe(quiet, language="en", beam_size=1, without_timestamps=True)
+        list(segments)  # transcription runs as the segments are read
 
 
 class BadAudio(ValueError):

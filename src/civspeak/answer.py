@@ -144,6 +144,13 @@ class Answerer:
         self._client = None
         self._client_key_hash = None
 
+    def warm_up(self) -> None:
+        """Import the client library and set up the client now (about a second), not on the first question."""
+        try:
+            self._client_for(read_key(self.key_path))
+        except (KeyMissing, OSError, ImportError):
+            pass
+
     def _client_for(self, key: str):
         import anthropic
 

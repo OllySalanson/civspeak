@@ -31,9 +31,12 @@ STOPWORDS = set(
 # Words that are part of many titles but carry little meaning on their own.
 WEAK = {"great", "district", "age", "era", "unit", "the", "of"}
 SECTION_WEIGHT = {"MOMENTS": 0.7}
+# Better Civilopedia's AI pages are titled like eras ("Medieval Era") but only list what the AI favours.
+LAYOUT_WEIGHT = {"TimeStrategy": 0.4}
 PLACEMENT_WORDS = {"where", "build", "built", "place", "placed", "placement", "put", "adjacent", "tile", "next"}
 
 _WORD = re.compile(r"[a-z0-9]+")
+_VOWEL_THEN_NASAL = re.compile(r"^[aeiou][mn][^aeiouy\s]")
 
 
 def singular(tok: str) -> str:
@@ -84,6 +87,7 @@ class Index:
         self.db.row_factory = sqlite3.Row
         self.meta = dict((r["key"], r["value"]) for r in self.db.execute("SELECT key, value FROM meta"))
         self.sections = dict(self.db.execute("SELECT id, section_id FROM pages").fetchall())
+        self.layouts = dict(self.db.execute("SELECT id, layout FROM pages").fetchall())
         self.names: list[_Name] = []
         self.by_norm: dict[str, list[_Name]] = defaultdict(list)
         self.by_sound: dict[str, list[_Name]] = defaultdict(list)
@@ -181,23 +185,30 @@ class Index:
                     if len(skey) >= 3:
                         bump(name.page, 0.82 + 0.03 * n, f"sounds like '{gram}'")
             for norm in difflib.get_close_matches(gram, self.by_len.get(n, []), n=4, cutoff=0.8):
+                if len(norm) < 4:
+                    continue  # "pay" is not evidence for "Pa": names this short only match exactly
                 ratio = difflib.SequenceMatcher(None, gram, norm).ratio()
                 for name in self.by_norm[norm]:
                     bump(name.page, 0.9 * ratio + 0.03 * n, f"close to '{gram}'")
 
         if max(scores.values(), default=0) < 0.8:
             # Nothing named outright: the speech recognizer may have misheard a name, so accept a
-            # near match on its sound ("embancer" -> Mbanza, "amanita" -> Amanitore).
+            # near match on its sound ("embancer" -> Mbanza, "amanita" -> Amanitore, "high pay should"
+            # -> Hypatia).
             for gram, n in grams.items():
-                if n > 2 or any(t in STOPWORDS or t in WEAK for t in gram.split()):
+                words = gram.split()
+                # A misheard name can swallow a common word at its end ("should"), never at its start.
+                if n > 3 or words[0] in STOPWORDS or any(t in WEAK for t in words) or all(t in STOPWORDS for t in words):
                     continue
                 compact = phrase_key(gram).replace(" ", "")
                 if len(compact) < 4:
                     continue
-                for skey in difflib.get_close_matches(compact, self.sound_keys, n=3, cutoff=0.75):
-                    ratio = difflib.SequenceMatcher(None, compact, skey).ratio()
-                    for name in self.by_sound[skey]:
-                        bump(name.page, 0.7 * ratio + 0.03 * n, f"sounds close to '{gram}'")
+                # A vowel is often heard before a name that starts "Mb", "Nd", "Ng"... ("embancer" for Mbanza).
+                for heard in {compact, compact[1:]} if _VOWEL_THEN_NASAL.match(gram) else {compact}:
+                    for skey in difflib.get_close_matches(heard, self.sound_keys, n=3, cutoff=0.75):
+                        ratio = difflib.SequenceMatcher(None, heard, skey).ratio()
+                        for name in self.by_sound[skey]:
+                            bump(name.page, 0.7 * ratio + 0.03 * n, f"sounds close to '{gram}'")
 
         # Multi-word names whose meaningful words all appear somewhere in the question.
         qset = set(content)
@@ -223,6 +234,7 @@ class Index:
         ranked = []
         for page, score in scores.items():
             score *= SECTION_WEIGHT.get(self.sections.get(page, ""), 1.0)
+            score *= LAYOUT_WEIGHT.get(self.layouts.get(page, ""), 1.0)
             if placement and page in self.placeable:
                 score += 0.05  # "where can I build X": X is something with placement rules
             ranked.append((score, page))
@@ -268,13 +280,16 @@ def entry_text(page: dict, budget: int = 3000) -> str:
     """Plain text of a page for the answer prompt: facts first, then chapters, within a budget."""
     head = f"{page['title']} ({page['section']}{' - ' + page['group'] if page['group'] else ''})"
     parts = [head]
+    used = len(head)
+    blocks = []
     for g in page["facts"]:
         body = "; ".join(g["lines"])
-        parts.append(f"{g['heading']}: {body}" if g["heading"] else body)
-    used = sum(len(p) for p in parts)
+        blocks.append(f"{g['heading']}: {body}" if g["heading"] else body)
     for c in page["chapters"]:
         text = "\n".join(c["paragraphs"])
-        block = f"{c['title']}:\n{text}" if c["title"] else text
+        blocks.append(f"{c['title']}:\n{text}" if c["title"] else text)
+    # Facts first, then chapters; a long page (every district's adjacency, say) is cut to fit.
+    for block in blocks:
         room = budget - used
         if room <= 200:
             break

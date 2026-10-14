@@ -105,7 +105,7 @@ def cmd_helper(args) -> int:
 
 
 def cmd_status(args) -> int:
-    from . import index, spend
+    from . import index, latency, spend
 
     out = paths.index_file()
     print(f"Index:      {out}")
@@ -123,6 +123,7 @@ def cmd_status(args) -> int:
     print(f"API key:    {'present' if key.exists() and key.stat().st_size else 'missing'} ({key})")
     ledger = spend.Ledger(paths.spend_file())
     print(f"Spend:      ${ledger.month_total():.2f} of ${ledger.cap:.2f} this month")
+    print(f"Speed:      {latency.summary(latency.LatencyLog(paths.latency_file()).recent(20))} ({paths.latency_file()})")
     return 0
 
 

@@ -302,6 +302,15 @@ const HOLD_MS = 350; // a press longer than this is hold-to-talk
 
 const rec = { state: "idle", mode: "toggle", stream: null, ctx: null, chunks: [], started: 0, lastVoice: 0, heard: false, pressedAt: 0 };
 
+// George and Whisper are unloaded after a while unused: ask the server to load them again as soon
+// as a question starts, so they are ready by the time it is asked.
+let lastWake = 0;
+function wake() {
+  if (performance.now() - lastWake < 20000) return;
+  lastWake = performance.now();
+  fetch("/api/wake", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
+}
+
 function setMic(state) {
   rec.state = state;
   micButton.dataset.state = state;
@@ -311,6 +320,7 @@ function setMic(state) {
 
 async function startListening(mode) {
   if (rec.state !== "idle" || micButton.disabled) return;
+  wake();
   if (current) current.abort();
   stopSpeaking();
   audioContext();
@@ -477,6 +487,8 @@ micButton.addEventListener("keydown", (ev) => {
 });
 
 // -- Typing and keys -------------------------------------------------------------------------
+
+input.addEventListener("input", wake);
 
 form.addEventListener("submit", (ev) => {
   ev.preventDefault();

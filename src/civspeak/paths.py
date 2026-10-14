@@ -46,6 +46,29 @@ def spend_file() -> Path:
     return data_dir() / "spend.jsonl"
 
 
+def latency_file() -> Path:
+    return data_dir() / "latency.jsonl"
+
+
+def cpu_threads() -> int:
+    """CPU threads George's voice and the speech recognizer may each use (CIVSPEAK_THREADS, 1-8, default 4).
+
+    Lower it if the game stutters while Civspeak answers; answers then take a little longer.
+    """
+    try:
+        return max(1, min(8, int(os.environ.get("CIVSPEAK_THREADS") or 4)))
+    except ValueError:
+        return 4
+
+
+def idle_unload_seconds() -> float:
+    """Unload the voice and speech models after this long unused (CIVSPEAK_IDLE_MINUTES, default 20; 0 = never)."""
+    try:
+        return max(0.0, float(os.environ.get("CIVSPEAK_IDLE_MINUTES") or 20)) * 60
+    except ValueError:
+        return 20 * 60
+
+
 def kokoro_files() -> tuple[Path, Path]:
     """The Kokoro model and voice pack (shared with the pixel-explainer narrator by default)."""
     base = Path(os.environ.get("CIVSPEAK_KOKORO_DIR") or os.path.expanduser("~/.local/share/pixel-explainer"))
