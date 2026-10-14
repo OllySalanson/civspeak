@@ -318,6 +318,15 @@ function setMic(state) {
   micButton.setAttribute("aria-label", state === "listening" ? "Stop listening" : "Ask out loud");
 }
 
+function notAllowedMessage() {
+  // In the Civspeak app (its own window, which pywebview gives a window.pywebview) only Windows itself can say no.
+  if ("pywebview" in window) {
+    return "Windows is not letting Civspeak use the microphone. Turn on Settings > Privacy & security > Microphone > " +
+      "Let desktop apps access your microphone, then try again.";
+  }
+  return "The browser is not allowed to use the microphone. Allow it for this page (the icon at the left of the address bar) and try again.";
+}
+
 async function startListening(mode) {
   if (rec.state !== "idle" || micButton.disabled) return;
   wake();
@@ -350,7 +359,7 @@ async function startListening(mode) {
     setMic("idle");
     show(statusEl, "");
     show(problemEl, err && err.name === "NotAllowedError"
-      ? "The browser is not allowed to use the microphone. Allow it for this page (the icon at the left of the address bar) and try again."
+      ? notAllowedMessage()
       : err && err.name === "NeedsClick"
         ? "Click anywhere on this page once so it may use the microphone and sound, then ask again."
         : "Could not start the microphone. Is one plugged in?");

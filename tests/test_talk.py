@@ -105,7 +105,7 @@ def test_hotkey_posts_must_be_json_with_a_known_key(talk_server):
 
 def test_messenger_sends_in_order_and_reports_an_unheard_press(talk_server):
     unheard = []
-    messenger = winhelper.Messenger(f"http://127.0.0.1:{talk_server}", lambda: unheard.append(True))
+    messenger = winhelper.Messenger(lambda key: press(talk_server, key), lambda: unheard.append(True))
     messenger.send("down")
     wait_for(lambda: unheard)
     page = Page(talk_server)
