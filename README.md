@@ -118,8 +118,14 @@ py -m venv %LOCALAPPDATA%\Civspeak\venv
   helper runs, starting the app just shows the helper's page. Turn the helper off first
   (`.venv/bin/civspeak helper uninstall` in WSL). Ticking **Start when I log in** in the app
   replaces the helper at login.
-- It keeps its files in `%LOCALAPPDATA%\Civspeak` and expects George's voice and the speech model in
-  its `models` folder (see "Where things live"); nothing is downloaded.
+- **First run: George's voice and the speech model download by themselves** (268 MB, once) into
+  `%LOCALAPPDATA%\Civspeak\models`, from the `models-v1` assets on Civspeak's GitHub Release. Each
+  file's size and SHA-256 are written into Civspeak, so a damaged file is thrown away and never used.
+  The download runs at low priority, picks up where it stopped if the connection drops or Civspeak
+  is turned off half way, and the page says how far it has got. Typed questions work meanwhile.
+  `civspeak models` shows what is in place; `civspeak models fetch` fetches it in a terminal.
+  George's voice here is Kokoro's int8 model: a third of the size and memory of the full one, at
+  the same speed and, to Whisper's ear, saying the same words.
 
 ### The API key and the spend cap
 
@@ -149,9 +155,10 @@ py -m venv %LOCALAPPDATA%\Civspeak\venv
 | The Windows app | `%LOCALAPPDATA%\Civspeak`: `app.log` (what went wrong, if anything), the page window's `webview` folder (it remembers Voice on or off) and `civspeak.ico` |
 
 Running under Windows' own Python instead of WSL (the coming Windows app), Civspeak keeps the index,
-spend ledger, timings and key in `%LOCALAPPDATA%\Civspeak`, and expects George's voice in its
-`models` folder and the speech model in `models\whisper-base.en` (the same environment variables
-override each). The game is found the same way, with Steam's folder read from the registry and
+spend ledger, timings and key in `%LOCALAPPDATA%\Civspeak`, and downloads George's voice
+(`kokoro-v1.0.int8.onnx`, `voices-v1.0.bin`) and the speech model (`whisper-base.en`) into its
+`models` folder (`CIVSPEAK_MODELS_DIR` moves it, `CIVSPEAK_MODELS_URL` fetches from a mirror; the
+variables above still override each model). The game is found the same way, with Steam's folder read from the registry and
 Documents from Windows itself.
 
 ## How it works

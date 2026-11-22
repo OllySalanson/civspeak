@@ -20,8 +20,9 @@ import time
 import wave
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from pathlib import Path
 
-from . import paths
+from . import models, paths
 
 log = logging.getLogger(__name__)
 
@@ -121,15 +122,26 @@ class Ears:
         self._hint = ("", "")
         self.error = ""
         self.last_used = time.monotonic()
+        self.download = None  # the Windows app's models.Download, which fetches the model's files
+
+    @property
+    def model_folder(self) -> Path | None:
+        """The folder holding the model, when it is one rather than a name in the Hugging Face cache."""
+        return Path(self.model_name) if os.path.sep in self.model_name or "/" in self.model_name else None
 
     def problem(self) -> str:
         """Why the microphone cannot be used on this PC, or "" if it can."""
         if self.error:
             return self.error
+        if self.download is not None and (waiting := self.download.problem(models.WHISPER)):
+            return waiting
         try:
             import faster_whisper  # noqa: F401
         except ImportError:
             return "Speech recognition is not installed. Run ./scripts/setup.sh to add it."
+        folder = self.model_folder
+        if folder is not None and not (folder / "model.bin").is_file():
+            return f"The speech recognition model was not found in {folder}, so the microphone is off."
         return ""
 
     @property
@@ -164,7 +176,7 @@ class Ears:
                 self.model_name, device="cpu", compute_type="int8", cpu_threads=self.threads, local_files_only=True
             )
         except Exception as e:  # missing from the cache, or a broken download
-            if os.path.sep in self.model_name or "/" in self.model_name:
+            if self.model_folder is not None:
                 self.error = f"The speech recognition model was not found in {self.model_name}, so the microphone is off."
             else:
                 self.error = (

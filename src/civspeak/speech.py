@@ -16,7 +16,7 @@ import time
 import wave
 from concurrent.futures import Future, ThreadPoolExecutor
 
-from . import paths
+from . import models, paths
 
 log = logging.getLogger(__name__)
 
@@ -115,11 +115,14 @@ class Voice:
         self._lock = threading.Lock()
         self.error = ""
         self.last_used = time.monotonic()
+        self.download = None  # the Windows app's models.Download, which fetches the voice files
 
     def problem(self) -> str:
         """Why George cannot speak on this PC, or "" if he can."""
         if self.error:
             return self.error
+        if self.download is not None and (waiting := self.download.problem(models.KOKORO)):
+            return waiting
         try:
             import kokoro_onnx  # noqa: F401
             import onnxruntime  # noqa: F401

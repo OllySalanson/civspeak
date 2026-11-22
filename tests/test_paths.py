@@ -269,14 +269,15 @@ def test_wsl_turns_windows_paths_into_mnt_paths(tmp_path):
 def test_windows_app_folders(monkeypatch, tmp_path):
     monkeypatch.delenv("CIVSPEAK_DATA_DIR")
     monkeypatch.delenv("CIVSPEAK_CONFIG_DIR")
-    for name in ("CIVSPEAK_KOKORO_DIR", "CIVSPEAK_WHISPER_MODEL"):
+    for name in ("CIVSPEAK_KOKORO_DIR", "CIVSPEAK_WHISPER_MODEL", "CIVSPEAK_MODELS_DIR"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(system, "IS_WINDOWS", True)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
     app = tmp_path / "Local" / "Civspeak"
     assert paths.data_dir() == paths.config_dir() == app
     assert paths.key_file() == app / "anthropic-key"
-    assert paths.kokoro_files() == (app / "models" / "kokoro-v1.0.onnx", app / "models" / "voices-v1.0.bin")
+    assert paths.kokoro_files() == (app / "models" / "kokoro-v1.0.int8.onnx", app / "models" / "voices-v1.0.bin")
+    assert paths.models_dir() == app / "models"
     assert paths.whisper_model() == str(app / "models" / "whisper-base.en")
     monkeypatch.setattr(system, "IS_WINDOWS", False)
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "share"))
