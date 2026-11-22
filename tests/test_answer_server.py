@@ -182,7 +182,7 @@ def test_no_key_still_shows_entries(running, tmp_path):
     events = ask(url, "thinkery")
     assert events[0][0] == "entries" and events[0][1]
     assert events[-1][0] == "problem" and events[-1][1]["kind"] == "no_key"
-    assert "No Claude API key" in events[-1][1]["message"]
+    assert "Answers are not set up yet" in events[-1][1]["message"]
 
 
 def test_monthly_limit_is_explained(running, tmp_path, key_file):

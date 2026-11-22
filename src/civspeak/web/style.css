@@ -321,7 +321,6 @@ kbd {
 .choice:has(input:checked) { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold) inset; }
 .choice input { flex: none; width: 18px; height: 18px; margin: 3px 0 0; accent-color: var(--gold); }
 .choice strong { font-weight: 600; }
-.choice .model { margin-left: 6px; font-size: 14px; color: var(--muted); }
 .choice .about { display: block; font-size: 15px; color: #d6deeb; }
 
 .check { display: flex; align-items: center; gap: 10px; cursor: pointer; }
