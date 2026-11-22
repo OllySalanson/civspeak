@@ -288,3 +288,28 @@ def test_settings_ask_the_app_for_a_folder_and_start_at_login(made, monkeypatch)
     assert desktop.starts_at_login() and runs["Civspeak"] == a.run_command()
     desktop.set_start_at_login(False)
     assert not desktop.starts_at_login()
+
+
+def test_the_tray_offers_a_ready_update_and_installs_it(made, monkeypatch):
+    a, win, _ = made
+    monkeypatch.setattr(winhelper, "starts_at_login", lambda command: False)  # the registry is Windows only
+
+    class Point:
+        x = y = 0
+
+    win.w = types.SimpleNamespace(POINT=Point)
+    win.ctypes = types.SimpleNamespace(byref=lambda p: p)
+    choices = [0, winhelper.MENU_UPDATE]  # the first menu is dismissed, the second chooses Install
+    win.TrackPopupMenu = lambda *args: choices.pop(0)
+    balloons = []
+    a._tray = lambda action, balloon="", warning=False: balloons.append(balloon)
+    installs = []
+    a.updater = types.SimpleNamespace(available=None, install=lambda: installs.append(1), stop=lambda: None)
+    a._menu()
+    assert not [c for c in win.named("AppendMenuW") if c[3] == winhelper.MENU_UPDATE]
+    a.updater.available = types.SimpleNamespace(version="9.9.9")
+    a._on_message(a.hwnd, winhelper.WM_UPDATE, 0, 0)
+    assert balloons == ["Civspeak 9.9.9 is ready. Click the star to install it."]
+    a._menu()
+    assert [c[4] for c in win.named("AppendMenuW") if c[3] == winhelper.MENU_UPDATE] == ["Install Civspeak 9.9.9"]
+    assert installs == [1]

@@ -112,6 +112,12 @@ py -m venv %LOCALAPPDATA%\Civspeak\venv
 - **Closing the window only hides it.** Holding `` ` `` in the game still works and George still
   answers. Click the star and choose **Open the answer page**, or start Civspeak again, to bring
   it back.
+- **Updates:** once a day the packaged app asks GitHub for Civspeak's latest published release.
+  When there is a newer one, the star says so and its menu gets **Install Civspeak x.y.z**, as
+  does Settings. Installing it downloads `Civspeak-Setup.exe`, checks it against the release's
+  `SHA256SUMS.txt` (a file that does not match is never run), starts it silently and turns
+  Civspeak off; Setup replaces the program, keeps your settings, key and George's voice, and starts
+  the new Civspeak. Running from source never updates itself.
 - **Start when I log in** (in the star's menu) has Windows start the app at login; **Turn off
   Civspeak** stops it, page and all.
 - Only one Civspeak runs at a time, because both want `` ` `` and the same page: while the WSL
@@ -262,7 +268,10 @@ this PC: on every pull request that touches the app, and on a version tag (`v1.2
 the pinned packages in `packaging/requirements-windows.txt` (PyAV left out: `packaging/stubs/av`
 stands in for it), builds the one-folder `Civspeak.exe` with `packaging/civspeak.spec`, runs
 `Civspeak.exe --selftest` on it, makes the installer with `packaging/civspeak.iss` (Inno Setup,
-per user, no administrator prompt), installs it silently, runs the self-test again and uninstalls.
+per user, no administrator prompt), installs it silently, runs the self-test again, installs it
+again the way the updater does (`/UPDATE=1`: the settings must survive and Civspeak must start
+again by itself) and uninstalls. A Release the updater offers needs both `Civspeak-Setup.exe` and
+`SHA256SUMS.txt`; the workflow attaches both.
 `civspeak selftest` runs the same checks from source.
 
 `tools/voice_check.py` tests the whole spoken path without a person: Kokoro says each question in

@@ -100,7 +100,12 @@ def test_the_build_installs_pinned_packages_without_pyav():
 
 def test_the_installer_and_the_app_agree():
     iss = (PACKAGING / "civspeak.iss").read_text()
-    assert f"AppMutex={winhelper.MUTEX_NAME}" in iss  # Setup waits for a running Civspeak to close
+    # Setup waits for a running Civspeak (its single-instance mutex) to close: for a minute when it is an
+    # update Civspeak started itself, otherwise it asks the player to turn it off.
+    assert f"CivspeakMutex = '{winhelper.MUTEX_NAME}';" in iss and "AppMutex=" not in iss
+    from civspeak import updates
+
+    assert "/UPDATE=1" in updates.SETUP_ARGUMENTS and "{param:UPDATE|0}" in iss and "Check: IsUpdate" in iss
     assert f'ValueName: "{winhelper.NAME}"' in iss and winhelper.RUN_KEY in iss  # the tray menu's own Run value
     assert "PrivilegesRequired=lowest" in iss and r"DefaultDirName={localappdata}\Programs\Civspeak" in iss
     assert f'"/delete:""{keys.CREDENTIAL}"""' in iss  # "remove everything" forgets the key too

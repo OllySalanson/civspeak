@@ -24,6 +24,8 @@ POST /api/settings       {"cap_usd": 5 | null, "game_dir": "...", "answer_model"
                            -> {"problem": "" or why it was refused, "settings": ...}
 POST /api/settings/key   {"key": "sk-ant-..."} checked with Claude for free, then kept; {"remove": true} forgets it
 POST /api/settings/folder {} the Windows app asks for the Civ VI folder with a folder picker
+POST /api/update         {} installs the newer Civspeak (it downloads, checks, starts Setup and turns off);
+                           {"check": true} asks GitHub now. Status is /api/settings's "update"
 POST /api/models         {} -> fetch George's voice and the speech recognizer (again), in the Windows app;
                            its progress is /api/status's "models"
 """
@@ -80,6 +82,7 @@ POSTS = (
     "/api/settings",
     "/api/settings/key",
     "/api/settings/folder",
+    "/api/update",
 )
 MAX_RECORDING = 4_000_000  # bytes: about two minutes of 16 kHz WAV; the page stops at 15 seconds
 STALE_CHECK_SECONDS = 10
@@ -135,6 +138,7 @@ class State:
         self.index: Index | None = None
         self.building = False
         self.build_error = ""
+        self.updater = None  # the packaged Windows app's updates.Updater
         self.game_language = ""  # the game's text language from AppOptions.txt (Civspeak builds English)
         self._last_check = 0.0
         self._checking = threading.Lock()
@@ -260,6 +264,7 @@ class State:
                 "options": [{"id": k, "label": c.label, "model": c.model} for k, c in answer_mod.CHOICES.items()],
             },
             "models": self.download.status() if self.download is not None else None,
+            "update": self.updater.status() if self.updater is not None else None,
             "start_at_login": desktop.starts_at_login() if desktop is not None else None,
             "can_choose_folder": desktop is not None and desktop.can_choose_folder,
         }
@@ -512,6 +517,9 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/settings"):
             self._settings(path)
             return
+        if path == "/api/update":
+            self._update()
+            return
         if path == "/api/models":
             download = self.state.download
             if download is None:
@@ -573,6 +581,22 @@ class Handler(BaseHTTPRequestHandler):
         else:
             problem = state.change_settings(payload, desktop)
         self._json(HTTPStatus.OK, {"problem": problem, "settings": state.settings_view(desktop)})
+
+    def _update(self) -> None:
+        updater = self.state.updater
+        if updater is None:
+            self._json(HTTPStatus.NOT_FOUND, {"error": "only the packaged Windows app updates itself"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(min(length, 1000)) or b"{}")
+        except ValueError:
+            payload = {}
+        if isinstance(payload, dict) and payload.get("check") is True:
+            updater.check(force=True)  # "Check now" in Settings
+        else:
+            updater.install()
+        self._json(HTTPStatus.OK, updater.status())
 
     def _hotkey(self) -> None:
         try:

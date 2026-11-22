@@ -707,11 +707,30 @@ function renderSettings(v) {
     : `${money(cap.spent)} spent this month. Civspeak stops asking Claude when the limit is reached. ` +
       "For a second safety net, set a spend limit in the Claude Console as well.");
 
+  const u = v.update;
+  $("set-update").hidden = !u;
+  if (u) {
+    const when = u.checked_at ? new Date(u.checked_at * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "";
+    $("update-state").textContent = {
+      idle: `You have Civspeak ${u.current}, the latest${when ? ` (checked ${when})` : ""}.`,
+      checking: "Looking for a newer Civspeak...",
+      available: `Civspeak ${u.version} is ready to install. You have ${u.current}. Your settings, key and George's voice are kept.`,
+      downloading: `Downloading Civspeak ${u.version}...`,
+      installing: `Installing Civspeak ${u.version}. Civspeak turns off now and starts again by itself in a minute.`,
+      failed: `The update stopped: ${u.error}`,
+    }[u.state];
+    $("update-state").classList.toggle("bad", u.state === "failed");
+    $("update-install").hidden = !["available", "failed"].includes(u.state) || !u.version;
+    $("update-install").textContent = u.state === "failed" ? "Try again" : "Install and restart";
+    $("update-check").hidden = u.state !== "idle";
+  }
+
   $("set-login").hidden = v.start_at_login === null;
   $("login-box").checked = Boolean(v.start_at_login);
 
   clearTimeout(settingsTimer);
-  if (settingsDialog.open && m && m.state === "downloading") settingsTimer = setTimeout(loadSettings, 1000);
+  const busyUpdate = u && ["checking", "downloading", "installing"].includes(u.state);
+  if (settingsDialog.open && ((m && m.state === "downloading") || busyUpdate)) settingsTimer = setTimeout(loadSettings, 1000);
 }
 
 async function loadSettings() {
@@ -834,6 +853,17 @@ for (const radio of document.querySelectorAll('input[name="answers"]')) {
     note("answers-note", problem, problem ? "bad" : "");
   });
 }
+
+$("update-install").addEventListener("click", () => busy($("update-install"), async () => {
+  await post("/api/update", {});
+  await loadSettings();
+  return "";
+}));
+$("update-check").addEventListener("click", () => busy($("update-check"), async () => {
+  await post("/api/update", { check: true });
+  await loadSettings();
+  return "";
+}));
 
 $("login-box").addEventListener("change", () => postSettings("/api/settings", { start_at_login: $("login-box").checked }));
 
