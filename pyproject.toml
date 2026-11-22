@@ -13,12 +13,15 @@ requires-python = ">=3.10"
 dependencies = ["anthropic>=1.13"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff>=0.6", "starlette>=1.10", "httpx>=0.28"]
 # George's voice (Kokoro) and the microphone (Whisper). Without them the page still answers typed questions.
 voice = ["kokoro-onnx>=0.6", "faster-whisper>=1.2", "numpy>=1.26"]
 # The Windows app (`civspeak app`): its page window (WebView2, built into Windows 10 and 11), and its own
 # microphone and speakers (sounddevice, with PortAudio inside).
 app = ["pywebview>=6.2; sys_platform == 'win32'", "sounddevice>=0.5; sys_platform == 'win32'"]
+
+# The answer service (answer_service.py, on Google Cloud Run; service/requirements.txt pins these).
+service = ["starlette>=1.10", "uvicorn>=0.54", "google-cloud-firestore>=2.34"]
 
 [project.scripts]
 civspeak = "civspeak.cli:main"

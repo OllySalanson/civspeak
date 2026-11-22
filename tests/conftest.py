@@ -302,6 +302,8 @@ def private_dirs(tmp_path_factory, monkeypatch):
     home = tmp_path_factory.mktemp("civspeak-home")
     monkeypatch.setenv("CIVSPEAK_DATA_DIR", str(home / "data"))
     monkeypatch.setenv("CIVSPEAK_CONFIG_DIR", str(home / "config"))
+    # Nothing reaches the real answer service: port 9 (discard) on this machine refuses at once.
+    monkeypatch.setenv("CIVSPEAK_ANSWER_URL", "http://127.0.0.1:9")
 
 
 @pytest.fixture

@@ -177,8 +177,8 @@ def test_page_and_answer_stream(running, tmp_path, key_file):
     assert events[-1][1]["text"] == "Put it on Meadow." and events[-1][1]["used"] == [1]
 
 
-def test_no_key_still_shows_entries(running, tmp_path):
-    url = running(Answerer(spend.Ledger(tmp_path / "spend.jsonl"), tmp_path / "missing-key"))
+def test_no_key_and_no_service_still_shows_entries(running, tmp_path):
+    url = running(Answerer(spend.Ledger(tmp_path / "spend.jsonl"), tmp_path / "missing-key", service=False))
     events = ask(url, "thinkery")
     assert events[0][0] == "entries" and events[0][1]
     assert events[-1][0] == "problem" and events[-1][1]["kind"] == "no_key"
