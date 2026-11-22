@@ -1,8 +1,13 @@
 """Short spoken-style answers from Claude, grounded only in the matched Civilopedia entries.
 
-The API key comes only from the player's own key store (keys.py: Windows Credential Manager in the
-Windows app, the anthropic-key file elsewhere), never from the environment, so no other key on this
-PC can be used by accident. It is never logged or printed.
+Players need no key: their questions go to Civspeak's answer service (online.py, answer_service.py),
+which holds the key and the limits. A player who adds their own key (Settings > Advanced) is answered
+with it directly, and pays for it under their own monthly limit (spend.py). The answer service runs
+this same Answerer with its own key and its own ledger.
+
+A player's key comes only from their key store (keys.py: Windows Credential Manager in the Windows
+app, the anthropic-key file elsewhere), never from the environment, so no other key on this PC can be
+used by accident. It is never logged or printed.
 """
 
 from __future__ import annotations
@@ -87,9 +92,14 @@ def read_key(path: Path | None = None) -> str:
 
 
 def build_user_message(question: str, hits: list[Hit], spoken: bool = False) -> str:
+    return build_message(question, [entry_text(hit.page) for hit in hits], spoken)
+
+
+def build_message(question: str, entries: list[str], spoken: bool = False) -> str:
+    """The request after the fixed instructions: the numbered entries' text, then the question."""
     blocks = []
-    for n, hit in enumerate(hits, 1):
-        blocks.append(f'<entry number="{n}">\n{entry_text(hit.page)}\n</entry>')
+    for n, text in enumerate(entries, 1):
+        blocks.append(f'<entry number="{n}">\n{text}\n</entry>')
     entries = "\n\n".join(blocks) if blocks else "(No Civilopedia entries matched this question.)"
     label = "Question (spoken aloud and written down by speech recognition, so names may be misheard)" if spoken else "Question"
     return f"<entries>\n{entries}\n</entries>\n\n{label}: {question.strip()}"
@@ -158,15 +168,44 @@ class SpokenFilter:
 
 
 class Answerer:
-    def __init__(self, ledger: spend.Ledger | None = None, key_path: Path | None = None, key_store=None, choice: str = ""):
+    def __init__(
+        self,
+        ledger: spend.Ledger | None = None,
+        key_path: Path | None = None,
+        key_store=None,
+        choice: str = "",
+        service=None,
+    ):
         self.ledger = ledger or spend.Ledger(paths.spend_file())
         self.choice = choice  # "" follows Settings, read again for every question
         self.keys = key_store or keys.store(key_path)
+        # Where questions go without a key of the player's own: None means Civspeak's answer service
+        # (online.AnswerService), False means nowhere (KeyMissing, as the answer service itself runs).
+        if service is None:
+            from . import online
+
+            service = online.AnswerService()
+        self.service = service or None
         self._client = None
         self._client_key_hash = None
 
+    def own_key(self) -> bool:
+        """Whether the player added their own key (Settings > Advanced): then it answers, not the service."""
+        try:
+            return self.keys.present()
+        except OSError:
+            return False
+
+    def wake(self) -> None:
+        """A question is coming (the talk key or the microphone was pressed): wake the answer service."""
+        if self.service is not None and not self.own_key():
+            self.service.warm_up()
+
     def warm_up(self) -> None:
         """Import the client library and set up the client now (about a second), not on the first question."""
+        if self.service is not None and not self.own_key():
+            self.service.warm_up()
+            return
         try:
             self._client_for(self.keys.read())
         except (KeyMissing, OSError, ImportError):
@@ -185,17 +224,29 @@ class Answerer:
     def stream(self, question: str, hits: list[Hit], spoken: bool = False) -> Iterator[tuple[str, object]]:
         """Yields ("delta", text) while the answer streams, then ("done", Result).
 
-        Raises KeyMissing, spend.CapReached or AnswerError before anything is spent.
+        Raises KeyMissing, spend.CapReached, online.LimitReached or AnswerError before anything is spent.
         """
+        entries = [entry_text(hit.page) for hit in hits]
+        if self.service is not None and not self.own_key():
+            yield from self.service.stream(question, entries, spoken)
+            return
+        yield from self.stream_entries(question, entries, spoken)
+
+    def stream_entries(
+        self, question: str, entries: list[str], spoken: bool = False, ledger=None
+    ) -> Iterator[tuple[str, object]]:
+        """The answer from Claude with this Answerer's key: as stream(), for entries already written
+        out as text. `ledger` (default this Answerer's) reserves and settles the spend."""
+        ledger = ledger if ledger is not None else self.ledger
         key = self.keys.read()  # before importing Claude's library (a second or more): no key says so at once
         import anthropic
 
         choice = CHOICES[self.choice if self.choice in CHOICES else configured_choice()]
-        user = build_user_message(question, hits, spoken)
+        user = build_message(question, entries, spoken)
         reserve = spend.worst_case_usd(
             estimate_tokens(SYSTEM_PROMPT + user), MAX_TOKENS, None if choice.fallback else choice.model
         )
-        reservation = self.ledger.reserve(reserve)
+        reservation = ledger.reserve(reserve)
         client = self._client_for(key)
         speakable = SpokenFilter()
         # A declined question goes on to another model where Claude offers that (Opus and Sonnet).
@@ -236,7 +287,7 @@ class Answerer:
         tail = answer[len(emitted) :] if answer.startswith(emitted) else ""
         if tail:
             yield "delta", tail
-        yield "done", Result(answer, [u for u in used if 1 <= u <= len(hits)], cost, total, final.model, usage, refused)
+        yield "done", Result(answer, [u for u in used if 1 <= u <= len(entries)], cost, total, final.model, usage, refused)
 
 
 def _cost(message, asked: str = MODEL) -> tuple[float, dict]:

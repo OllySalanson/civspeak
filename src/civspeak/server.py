@@ -53,7 +53,7 @@ from pathlib import Path
 
 from . import answer as answer_mod
 from . import index as index_mod
-from . import keys, models, paths, settings, spend, system
+from . import keys, models, online, paths, settings, spend, system
 from .answer import Answerer, AnswerError, KeyMissing
 from .hearing import BadAudio, Ears, Heard
 from .idle import IdleUnloader
@@ -98,7 +98,12 @@ SPOKEN_PROBLEMS = {
     "no_key": "Answers aren't set up yet, so I can't answer. The entries are on screen.",
     "cap": "The monthly limit is reached, so I can't answer until next month. The entries are on screen.",
     "api": "I can't get an answer right now. The entries are on screen.",
+    "limit_daily": "You're a Civspeak power user! You've reached today's free limit. The Civspeak window says how to get more.",
+    "limit_monthly": "Civspeak has answered so many questions this month that answers are resting until next month. "
+    "The entries are on screen.",
 }
+# Where a player asks for a higher daily limit (the limit pop-up shows it, with their install ID).
+LIMIT_EMAIL = "ollysalanson@gmail.com"
 NOT_HEARD = "Sorry, I didn't catch that."
 
 # What the Settings screen says when the game is not found (the command line gives the longer story).
@@ -133,6 +138,7 @@ class State:
             self.voice.download = self.ears.download = self.download
             self.download.on_ready.append(self.wake)  # load them as soon as they are in place
         self.last_listen: dict = {}
+        self.reached: dict | None = None  # the answer service's last limit, for a page opened after it
         self._waking = threading.Lock()
         self.lock = threading.Lock()
         self.index: Index | None = None
@@ -224,12 +230,22 @@ class State:
             "build_error": self.build_error,
             "game_language": self.game_language,
             "key": self.answerer.keys.present(),
+            "own_key": self.answerer.own_key(),
             "spent": round(ledger.month_total(), 4),
             "cap": ledger.cap,
             "voice": {"problem": self.voice.problem(), "ready": self.voice.loaded},
             "mic": {"problem": self.ears.problem(), "ready": self.ears.loaded},
             "models": self.download.status() if self.download is not None else None,
+            "limit": self.limit(),
         }
+
+    def limit(self) -> dict | None:
+        """The answer service's limit reached today (daily) or this month (monthly), until an answer comes."""
+        r = self.reached
+        if r is None:
+            return None
+        period = "%Y-%m-%d" if r["limit"] == "daily" else "%Y-%m"
+        return r if time.strftime(period, time.localtime(r["at"])) == time.strftime(period) else None
 
     # -- Settings and the first-run screen -------------------------------------------------------
 
@@ -248,6 +264,8 @@ class State:
             "native": desktop is not None,
             "setup_needed": desktop is not None and not chosen.setup_done,
             "key": {"present": self.answerer.keys.present(), "where": self.answerer.keys.where},
+            "install_id": online.install_id(),
+            "limit_email": LIMIT_EMAIL,
             "console_url": keys.CONSOLE_KEYS_URL,
             "cap": {
                 "usd": ledger.cap,
@@ -335,6 +353,7 @@ class State:
         if not self._waking.acquire(blocking=False):
             return  # already waking
         try:
+            self.answerer.wake()  # the answer service too, if it has gone to sleep
             if not self.voice.loaded and not self.voice.problem():
                 self.narrator.warm_up()
             if not self.ears.loaded and not self.ears.problem():
@@ -692,10 +711,10 @@ class Answering:
         self.state = state
         self._event = event
 
-    def _problem(self, kind: str, message: str, speaker: Speaker | None) -> None:
-        self._event("problem", {"kind": kind, "message": message})
+    def _problem(self, kind: str, message: str, speaker: Speaker | None, said: str = "", **extra) -> None:
+        self._event("problem", {"kind": kind, "message": message, **extra})
         if speaker:
-            speaker.say(SPOKEN_PROBLEMS[kind])
+            speaker.say(SPOKEN_PROBLEMS[said or kind])
 
     def run(self, question: str, speaker: Speaker | None, spoken: bool) -> None:
         timing = {"spoken": spoken, "voice_cold": bool(speaker) and not self.state.voice.loaded}
@@ -747,6 +766,7 @@ class Answering:
                             "cost": round(r.cost_usd, 5),
                             "spent": round(r.month_total, 4),
                             "cap": state.answerer.ledger.cap,
+                            "own_key": state.answerer.own_key(),
                             "first_text_seconds": round(first or 0, 2),
                             "seconds": round(time.monotonic() - started, 2),
                             "refused": r.refused,
@@ -755,6 +775,7 @@ class Answering:
                     log.info("answered in %.1fs (first text %.1fs), $%.4f", time.monotonic() - started, first or 0, r.cost_usd)
                     timing["first_text_s"] = round(first or 0, 2)
                     timing["cost"] = round(r.cost_usd, 5)
+            state.reached = None
             return "answered"
         except KeyMissing:
             self._problem(
@@ -772,6 +793,23 @@ class Answering:
                 speaker,
             )
             return "cap"
+        except online.LimitReached as e:
+            if e.kind == "daily":
+                message = (
+                    f"You've reached today's free limit of {e.allowed} questions."
+                    if e.allowed
+                    else ("You've reached today's free limit of questions.")
+                )
+                message += " Answers start again tomorrow; the Civilopedia entries below still work."
+            else:
+                message = (
+                    "Civspeak has answered so many questions this month that answers are resting until next month. "
+                    "The Civilopedia entries below still work."
+                )
+            reached = {"limit": e.kind, "allowed": e.allowed, "install_id": e.install_id, "email": LIMIT_EMAIL, "at": time.time()}
+            state.reached = reached
+            self._problem("limit", message, speaker, said=f"limit_{e.kind}", **reached)
+            return "limit"
         except AnswerError as e:
             self._problem("api", str(e), speaker)
             return "api"

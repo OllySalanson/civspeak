@@ -33,9 +33,11 @@ function money(n) {
   return "$" + Number(n).toFixed(2);
 }
 
-function setSpend(spent, cap) {
+// The month's spend shows only for a player's own key (Settings > Advanced): otherwise answers cost them nothing.
+function setSpend(spent, cap, ownKey) {
   const el = $("spend");
-  el.hidden = false;
+  el.hidden = !ownKey;
+  if (!ownKey) return;
   el.textContent = `${money(spent)} of ${money(cap)} this month`;
   el.classList.toggle("warn", spent >= cap * 0.9);
 }
@@ -55,14 +57,15 @@ async function refreshStatus() {
     } else {
       source.textContent = "Building the Civilopedia from your game...";
     }
-    setSpend(s.spent, s.cap);
+    setSpend(s.spent, s.cap, s.own_key);
     voiceProblem = s.voice.problem;
     if (s.native && !native) {
       native = true;
       tellVoice();
     }
     showVoice();
-    $("open-settings").classList.toggle("attention", !s.key || s.models?.state === "failed");
+    $("open-settings").classList.toggle("attention", s.models?.state === "failed");
+    if (s.limit) showLimit(s.limit); // reached while this window was closed: say so now it is open
     micButton.disabled = Boolean(s.mic.problem);
     micButton.title = s.mic.problem || "Ask out loud: click, or hold ` (the key under Esc)";
     if (s.mic.problem) show(problemEl, s.mic.problem);
@@ -170,10 +173,11 @@ function showAnswerEvent(event, data) {
     show(statusEl, "");
     show(answerEl, data.text);
     markUsed(data.used);
-    setSpend(data.spent, data.cap);
+    setSpend(data.spent, data.cap, data.own_key);
   } else if (event === "problem") {
     show(statusEl, "");
     show(problemEl, data.message);
+    if (data.kind === "limit") showLimit(data);
   }
 }
 
@@ -650,11 +654,15 @@ function renderSettings(v) {
   settingsView = v;
   $("console-link").href = v.console_url;
 
+  $("install-id").textContent = v.install_id;
   const key = v.key.present;
-  mark("set-key", key);
   $("key-state").textContent = key
-    ? `Your key is saved${v.key.where.includes("Credential") ? " in Windows Credential Manager" : ` in ${v.key.where}`}. Paste a new one to replace it.`
-    : "Civspeak asks Claude to answer with your own key. Getting one takes a couple of minutes:";
+    ? `Your key is saved${v.key.where.includes("Credential") ? " in Windows Credential Manager" : ` in ${v.key.where}`}. ` +
+      "Civspeak answers with it, and you pay for your own answers. Paste a new one to replace it."
+    : "Answers come with Civspeak. If you would rather answer with your own Claude key and pay for your own answers, " +
+      "getting one takes a couple of minutes:";
+  // The model and the monthly limit are about the player's own key's spending.
+  $("set-answers").hidden = $("set-cap").hidden = !key;
   $("key-steps").hidden = key;
   $("key-remove").hidden = !key;
   $("key-save").textContent = key ? "Check and replace" : "Check and save";
@@ -866,6 +874,53 @@ $("update-check").addEventListener("click", () => busy($("update-check"), async 
 }));
 
 $("login-box").addEventListener("change", () => postSettings("/api/settings", { start_at_login: $("login-box").checked }));
+
+// -- Copy buttons and the limit pop-up --------------------------------------------------------
+
+for (const b of document.querySelectorAll("button[data-copy]")) {
+  b.addEventListener("click", async () => {
+    const text = $(b.dataset.copy).textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // No clipboard permission: select it, so Ctrl+C copies it.
+      getSelection().selectAllChildren($(b.dataset.copy));
+      return;
+    }
+    b.textContent = "Copied";
+    setTimeout(() => (b.textContent = "Copy"), 2000);
+  });
+}
+
+const limitDialog = $("limit");
+let limitShown = ""; // the limit already shown, so the same one never pops up twice
+
+// Today's free limit (for this PC) or this month's (for everyone) is reached.
+function showLimit(data) {
+  const which = `${data.limit}:${data.install_id}:${data.at ?? ""}`;
+  if (limitShown === which || limitDialog.open) return;
+  limitShown = which;
+  const daily = data.limit === "daily";
+  $("limit-title").textContent = daily ? "Congratulations! You're a Civspeak power user" : "Answers are resting";
+  $("limit-daily").hidden = !daily;
+  $("limit-monthly").hidden = daily;
+  $("limit-reached").textContent = data.allowed
+    ? `You've asked ${data.allowed} questions today. That's the free limit for one day.`
+    : "You've reached the free limit for one day.";
+  $("limit-id").textContent = data.install_id;
+  const mail = $("limit-mail");
+  mail.textContent = data.email;
+  mail.href = `mailto:${data.email}?subject=${encodeURIComponent("Civspeak limit increase")}` +
+    `&body=${encodeURIComponent(`My Civspeak ID is ${data.install_id}`)}`;
+  if (settingsDialog.open) closeSettings();
+  limitDialog.showModal();
+}
+
+for (const id of ["limit-close", "limit-done"]) $(id).addEventListener("click", () => limitDialog.close());
+limitDialog.addEventListener("click", (ev) => {
+  if (ev.target === limitDialog) limitDialog.close();
+});
+limitDialog.addEventListener("close", () => input.focus());
 
 showVoice();
 

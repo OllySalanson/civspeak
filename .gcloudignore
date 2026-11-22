@@ -1,0 +1,8 @@
+# What `gcloud builds submit` uploads for the answer service: only what service/Dockerfile copies.
+/*
+!/service/
+!/src/
+!/pyproject.toml
+!/README.md
+!/LICENSE
+__pycache__/

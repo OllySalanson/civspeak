@@ -1,6 +1,7 @@
 """What the player chose in Settings: the monthly spending limit, the Civ VI folder (when Civspeak could
-not find it by itself) and whether the first-run screen is done. Kept as settings.json in civspeak's
-config folder; anything missing or unreadable falls back to its default. The key is not here (keys.py).
+not find it by itself) and whether the first-run screen is done, plus this install's anonymous ID.
+Kept as settings.json in civspeak's config folder; anything missing or unreadable falls back to its
+default. The key is not here (keys.py).
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ class Settings:
     game_dir: str = ""  # the Civ VI install chosen by hand; "" means found by itself
     setup_done: bool = False  # the first-run screen was finished (or skipped)
     answer_model: str = ""  # "quick", "balanced" or "best" (answer.CHOICES); "" means this route's default
+    install_id: str = ""  # this install's anonymous ID for the answer service (online.install_id makes it)
 
 
 def path() -> Path:
@@ -52,6 +54,8 @@ def load() -> Settings:
     out.setup_done = out.setup_done is True
     if not isinstance(out.answer_model, str):
         out.answer_model = ""
+    if not isinstance(out.install_id, str):
+        out.install_id = ""
     return out
 
 

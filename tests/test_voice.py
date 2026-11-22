@@ -281,7 +281,7 @@ def test_problems_are_spoken_too(voiced, tmp_path):
     url, _, _ = voiced(key_path=tmp_path / "missing")
     events = post_json(url, "/api/ask", {"question": "thinkery", "speak": True})
     assert events[-2][0] == "problem" and events[-1][0] == "say"
-    assert events[-1][1]["text"] == server.SPOKEN_PROBLEMS["no_key"]
+    assert events[-1][1]["text"] == server.SPOKEN_PROBLEMS["api"]  # no key of its own, and no answer service in tests
 
 
 def test_spoken_question_is_marked_for_claude(voiced):

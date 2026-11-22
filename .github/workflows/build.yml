@@ -89,11 +89,15 @@ jobs:
           $setup.WaitForExit()
           if ($setup.ExitCode -ne 0) { Get-Content install.log; throw "Setup failed ($($setup.ExitCode))" }
           $exe = "$env:LOCALAPPDATA\Programs\Civspeak\Civspeak.exe"
+          # A release (a tag) also asks the live answer service a question, as a player's first one would:
+          # a fresh Windows machine with no key anywhere.
+          if ("${{ github.ref_type }}" -eq "tag") { $env:CIVSPEAK_SELFTEST_ONLINE = "1" }
           $p = Start-Process -FilePath $exe -ArgumentList "--selftest", "--report", "selftest-installed.txt" -PassThru
           $null = $p.Handle  # without this, ExitCode stays empty
           $p.WaitForExit()
           Get-Content selftest-installed.txt
           if ($p.ExitCode -ne 0) { throw "The installed self-test failed ($($p.ExitCode) checks)" }
+          Remove-Item Env:CIVSPEAK_SELFTEST_ONLINE -ErrorAction SilentlyContinue
 
           # An update, as Civspeak's own updater starts it: over the installed copy, keeping the
           # player's settings, then starting the new Civspeak by itself.
@@ -156,6 +160,7 @@ jobs:
         with:
           path: artifact
           merge-multiple: true
+      # upload-artifact keeps the files' paths below their common folder, so the installer is under dist/.
       - name: Draft the release (a person reads it over and publishes it)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -164,4 +169,4 @@ jobs:
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
             --title "Civspeak ${TAG#v}" \
             --notes "Download Civspeak-Setup.exe and run it. SHA256SUMS.txt holds its SHA-256." \
-            artifact/Civspeak-Setup.exe artifact/SHA256SUMS.txt
+            artifact/dist/Civspeak-Setup.exe artifact/dist/SHA256SUMS.txt
