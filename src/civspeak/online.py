@@ -17,6 +17,7 @@ import logging
 import os
 import secrets
 import threading
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
@@ -27,6 +28,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_URL = "https://civspeak-answers-cyjkea5pta-ew.a.run.app"
 TIMEOUT_SECONDS = 60
+WAKE_EVERY_SECONDS = 300
 # Crockford's base32: no I, L, O or U, so an ID read out or typed into an email cannot be misread.
 ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _id_lock = threading.Lock()
@@ -75,13 +77,28 @@ class AnswerService:
     def __init__(self, url: str | None = None, timeout: float = TIMEOUT_SECONDS):
         self._url = url
         self.timeout = timeout
+        self._woken = -WAKE_EVERY_SECONDS
 
     @property
     def url(self) -> str:
         return self._url if self._url is not None else service_url()
 
     def warm_up(self) -> None:
-        """Nothing to load: the service keeps itself warm."""
+        """Wake the service in the background, so a question after a quiet spell is answered as quickly as
+        the rest: Cloud Run lets it sleep after about 15 minutes unused, and it takes some seconds to
+        start. At most once every few minutes; a failure here is not a problem (the question says so)."""
+        now = time.monotonic()
+        if not self.url or now - self._woken < WAKE_EVERY_SECONDS:
+            return
+        self._woken = now
+        threading.Thread(target=self._ping, name="wake-answers", daemon=True).start()
+
+    def _ping(self) -> None:
+        try:
+            request = urllib.request.Request(self.url + "/healthz", headers={"User-Agent": f"Civspeak/{__version__}"})
+            urllib.request.urlopen(request, timeout=self.timeout).close()
+        except (urllib.error.URLError, OSError) as e:
+            log.info("could not wake the answer service: %s", e)
 
     def stream(self, question: str, entries: list[str], spoken: bool = False) -> Iterator[tuple[str, object]]:
         """As answer.Answerer.stream: ("delta", text) while the answer streams, then ("done", Result).

@@ -353,6 +353,7 @@ class State:
         if not self._waking.acquire(blocking=False):
             return  # already waking
         try:
+            self.answerer.wake()  # the answer service too, if it has gone to sleep
             if not self.voice.loaded and not self.voice.problem():
                 self.narrator.warm_up()
             if not self.ears.loaded and not self.ears.problem():

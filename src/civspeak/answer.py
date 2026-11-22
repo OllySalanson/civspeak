@@ -196,6 +196,11 @@ class Answerer:
         except OSError:
             return False
 
+    def wake(self) -> None:
+        """A question is coming (the talk key or the microphone was pressed): wake the answer service."""
+        if self.service is not None and not self.own_key():
+            self.service.warm_up()
+
     def warm_up(self) -> None:
         """Import the client library and set up the client now (about a second), not on the first question."""
         if self.service is not None and not self.own_key():

@@ -291,3 +291,13 @@ def test_limit_reaches_the_page_and_is_kept_for_a_page_opened_later(built_index,
     assert state.status()["limit"]["install_id"] == online.install_id()
     assert state.status()["own_key"] is False
     assert state.settings_view()["install_id"] == online.install_id()
+
+
+def test_waking_the_service_pings_it_at_most_every_few_minutes(fake_service, monkeypatch):
+    pinged = []
+    svc = online.AnswerService()
+    monkeypatch.setattr(svc, "_ping", lambda: pinged.append(1))
+    monkeypatch.setattr(online.threading, "Thread", lambda target, **kw: SimpleNamespace(start=target))
+    svc.warm_up()
+    svc.warm_up()
+    assert pinged == [1]
