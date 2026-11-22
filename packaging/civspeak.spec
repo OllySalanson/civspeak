@@ -56,6 +56,7 @@ VERSION = VSVersionInfo(
 datas = (
     collect_data_files("civspeak", includes=["web/*"])  # the answer page
     + collect_data_files("espeakng_loader")  # espeak-ng's pronunciation data, for George
+    + collect_data_files("kokoro_onnx")  # Kokoro's own config.json (its phoneme vocabulary)
     + collect_data_files("faster_whisper")  # the silence detector's model (assets/silero_vad_*.onnx)
     + collect_data_files("webview")  # the page window's WebView2 libraries and scripts
     + collect_data_files("_sounddevice_data")  # PortAudio
