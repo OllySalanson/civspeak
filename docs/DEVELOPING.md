@@ -119,9 +119,10 @@ py -m venv %LOCALAPPDATA%\Civspeak\venv
   helper runs, starting the app just shows the helper's page. Turn the helper off first
   (`.venv/bin/civspeak helper uninstall` in WSL). Ticking **Start when I log in** in the app
   replaces the helper at login.
-- **First run: a "Set up Civspeak" screen** asks for your Claude key (with the three steps to get
-  one), shows where it found Civ VI (or a **Choose folder...** button when it could not), shows the
-  voice download, the monthly limit and **Start Civspeak when I log in to Windows**. If your game is
+- **First run: a "Set up Civspeak" screen** shows where it found Civ VI (or a **Choose folder...**
+  button when it could not), the voice download and **Start Civspeak when I log in to Windows**. No
+  key is needed (see [The answer service](#the-answer-service)); **Advanced** holds the player's
+  Civspeak ID and their own key, with the Answers choice and monthly limit once a key is added. If your game is
   not in English it says that Civspeak speaks English and uses the English names. The same screen
   is **Settings** afterwards.
 - **First run: George's voice and the speech model download by themselves** (268 MB, once) into
@@ -135,20 +136,65 @@ py -m venv %LOCALAPPDATA%\Civspeak\venv
 
 ## Your own API key and the spend cap
 
-- **Settings** (top right of the page) takes the key: paste it and Civspeak checks it with Claude's
+Optional: without one, answers come from [the answer service](#the-answer-service).
+
+- **Settings > Advanced** takes the key: paste it and Civspeak checks it with Claude's
   Models API, which costs nothing, before keeping it. It never shows the key again.
 - In WSL the key lives in `~/.config/civspeak/anthropic-key` (mode 600, outside the repo). The
   Windows app keeps it in **Windows Credential Manager** ("Civspeak/Claude API key", tied to your
   Windows login), and moves a key file left by an earlier Civspeak in there. Any
   `ANTHROPIC_API_KEY` in the environment is ignored, so a work key is never used by accident. The
   key is never printed or logged.
-- Without the key the page says so plainly and still shows the Civilopedia entries.
+- With no key of your own and no answer service (`CIVSPEAK_ANSWER_URL=off`), the page says so plainly
+  and still shows the Civilopedia entries.
 - Spending is capped at **$10 a month** in WSL and **$5 a month** in the Windows app, unless you
   choose another limit in Settings. It is tracked locally in `spend.jsonl` in the data folder. Each
   question reserves its worst-case cost before calling Claude, so the cap cannot be exceeded. When
   the cap is reached the page says "Monthly limit reached" and keeps showing entries. A typical
   answer costs about 2 cents on Best and well under a tenth of a cent on Quick.
   (`CIVSPEAK_MONTHLY_CAP_USD` wins over Settings.)
+
+## The answer service
+
+Players need no key: the app sends each question, with the Civilopedia entries it found, to Civspeak's
+answer service (`src/civspeak/answer_service.py`), which answers with Civspeak's own key on Google
+Cloud Run (project `pixelreel-515501`, region `europe-west1`, service `civspeak-answers`, at
+`online.DEFAULT_URL`). It runs the same `Answerer`, instructions and Quick model as the app, so it is
+no general-purpose proxy, and it streams the answer back as JSON lines. A player who adds their own key
+under **Settings > Advanced** is answered with it directly instead, and only then do the Answers choice
+and the monthly spending limit show.
+
+- **Limits**, counted in Firestore in one transaction before every answer: 100 questions a day per
+  install (`CIVSPEAK_DAILY_QUESTIONS`), 300 a day per internet address (`CIVSPEAK_IP_DAILY_QUESTIONS`,
+  so made-up IDs do not get round the first), and a hard $18 a month for everyone
+  (`CIVSPEAK_MONTHLY_CAP_USD`), under the key's own $20 limit in the Claude Console. Each answer
+  reserves its worst case first and settles its real cost after, so the cap cannot be overshot.
+  Days and months are UTC. Daily counters expire after 3 days (a Firestore TTL policy).
+- **The install ID** (`CS-XXXX-XXXX-XXXX`, random, made on first run, kept in `settings.json`) is all
+  that identifies a player. When a limit is reached the app shows a pop-up with the ID, a Copy button
+  and the address to email for a higher limit. Raise one, with no code change or rebuild:
+
+  ```sh
+  service/deploy.sh raise CS-XXXX-XXXX-XXXX 500
+  ```
+
+- **Privacy:** nothing a player asked is stored or logged: only counts, the install ID, a hash of the
+  address with the day, and dollars.
+- **Deploying** (from the repository root; `gcloud` signed in to the project):
+
+  ```sh
+  service/deploy.sh setup    # once: Firestore and its TTL policies, the service account, the image repository
+  service/deploy.sh key      # the key from ~/.config/civspeak/answer-service-key, as a Secret Manager secret
+  service/deploy.sh          # build (Cloud Build, service/Dockerfile) and deploy; raised IDs are kept
+  ```
+
+- **Cost:** on 22 Nov 2026 an answer cost $0.00006 to $0.00015 on the live service (Haiku 5.5,
+  about 2,700 input and 80 output tokens), so $18 covers well over 100,000 answers. Cloud Run scales
+  to zero (no charge while idle); a sleeping service takes a few seconds to start, so the app wakes
+  it (`/healthz`) when it starts and when the talk key is pressed.
+- **Tests:** `tests/test_answer_service.py` runs the service with a fake Claude and counters in
+  memory, and the app's client against a fake service. `CIVSPEAK_ANSWER_URL` points the app at
+  another service (`off` for none); tests point it at a closed port, so they never reach the real one.
 
 ## Where things live
 
