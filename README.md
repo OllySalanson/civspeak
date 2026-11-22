@@ -118,6 +118,11 @@ py -m venv %LOCALAPPDATA%\Civspeak\venv
   helper runs, starting the app just shows the helper's page. Turn the helper off first
   (`.venv/bin/civspeak helper uninstall` in WSL). Ticking **Start when I log in** in the app
   replaces the helper at login.
+- **First run: a "Set up Civspeak" screen** asks for your Claude key (with the three steps to get
+  one), shows where it found Civ VI (or a **Choose folder...** button when it could not), shows the
+  voice download, the monthly limit and **Start Civspeak when I log in to Windows**. If your game is
+  not in English it says that Civspeak speaks English and uses the English names. The same screen
+  is **Settings** afterwards.
 - **First run: George's voice and the speech model download by themselves** (268 MB, once) into
   `%LOCALAPPDATA%\Civspeak\models`, from the `models-v1` assets on Civspeak's GitHub Release. Each
   file's size and SHA-256 are written into Civspeak, so a damaged file is thrown away and never used.
@@ -129,14 +134,19 @@ py -m venv %LOCALAPPDATA%\Civspeak\venv
 
 ### The API key and the spend cap
 
-- The key is read only from `~/.config/civspeak/anthropic-key` (mode 600, outside the repo). Any
+- **Settings** (top right of the page) takes the key: paste it and Civspeak checks it with Claude's
+  Models API, which costs nothing, before keeping it. It never shows the key again.
+- In WSL the key lives in `~/.config/civspeak/anthropic-key` (mode 600, outside the repo). The
+  Windows app keeps it in **Windows Credential Manager** ("Civspeak/Claude API key", tied to your
+  Windows login), and moves a key file left by an earlier Civspeak in there. Any
   `ANTHROPIC_API_KEY` in the environment is ignored, so a work key is never used by accident. The
   key is never printed or logged.
 - Without the key the page says so plainly and still shows the Civilopedia entries.
-- Spending is capped at **$10 a month**, tracked locally in `~/.local/share/civspeak/spend.jsonl`.
-  Each question reserves its worst-case cost before calling Claude, so the cap cannot be exceeded.
-  When the cap is reached the page says "Monthly limit reached" and keeps showing entries. A typical
-  answer costs about 2 cents. (`CIVSPEAK_MONTHLY_CAP_USD` changes the cap.)
+- Spending is capped at **$10 a month** in WSL and **$5 a month** in the Windows app, unless you
+  choose another limit in Settings. It is tracked locally in `spend.jsonl` in the data folder. Each
+  question reserves its worst-case cost before calling Claude, so the cap cannot be exceeded. When
+  the cap is reached the page says "Monthly limit reached" and keeps showing entries. A typical
+  answer costs about 2 cents. (`CIVSPEAK_MONTHLY_CAP_USD` wins over Settings.)
 
 ### Where things live
 
@@ -146,7 +156,8 @@ py -m venv %LOCALAPPDATA%\Civspeak\venv
 | Spend ledger | `~/.local/share/civspeak/spend.jsonl` |
 | Answer timings | `~/.local/share/civspeak/latency.jsonl` (the last 500 to 1,000 questions) |
 | API key | `~/.config/civspeak/anthropic-key` |
-| Game install | found automatically: every Steam library on any drive (from Steam's `libraryfolders.vdf`), or the Epic Games launcher's install; override with `CIVSPEAK_GAME_DIR` |
+| Game install | found automatically: every Steam library on any drive (from Steam's `libraryfolders.vdf`), or the Epic Games launcher's install; or the folder chosen in Settings; override with `CIVSPEAK_GAME_DIR` |
+| Settings | `settings.json` in the config folder: the monthly limit, a Civ VI folder chosen by hand, and whether the first-run screen is done |
 | George's voice (Kokoro model) | `~/.local/share/pixel-explainer/kokoro-v1.0.onnx` and `voices-v1.0.bin`; override with `CIVSPEAK_KOKORO_DIR` |
 | Speech recognition model | `~/.cache/huggingface` (Whisper `base.en`); `CIVSPEAK_WHISPER_MODEL=small.en` tries the bigger one |
 | Game cache and logs | `%LOCALAPPDATA%\Firaxis Games\Sid Meier's Civilization VI` (or its `(Epic)` twin, whichever game was loaded last); override with `CIVSPEAK_USER_DIR` |

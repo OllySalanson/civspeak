@@ -34,7 +34,12 @@ _EPIC_NAME = re.compile(r"civilization vi\b", re.IGNORECASE)
 
 
 class SetupError(RuntimeError):
-    """Something civspeak needs on this PC is missing; the message says what to do."""
+    """Something civspeak needs on this PC is missing; the message says what to do. `missing` says
+    what: "install" (the game itself) or "user_dir" (its Cache and Logs, there once it has run)."""
+
+    def __init__(self, message: str, missing: str = ""):
+        super().__init__(message)
+        self.missing = missing
 
 
 def app_dir() -> Path | None:
@@ -410,6 +415,38 @@ def _env_dir(name: str) -> Path | None:
     return Path(value) if value and os.path.isdir(value) else None
 
 
+def is_game_dir(folder: Path) -> bool:
+    """Whether `folder` is a Civ VI install (it holds the game's Base\\Assets)."""
+    return (folder / "Base" / "Assets").is_dir()
+
+
+def game_dir_from(chosen: str) -> tuple[Path | None, str]:
+    """A folder the player picked by hand as their Civ VI install: (the install, "") when it is one or
+    directly holds one (such as steamapps\\common), otherwise (None, what is wrong)."""
+    if not chosen.strip():
+        return None, "Choose the folder Civ VI is installed in."
+    folder = Path(chosen.strip())
+    if not folder.is_dir():
+        return None, f"{folder} is not a folder on this PC."
+    inside = (GAME_FOLDER,), ("common", GAME_FOLDER), ("steamapps", "common", GAME_FOLDER)
+    for candidate in (folder, *(folder.joinpath(*parts) for parts in inside)):
+        if is_game_dir(candidate):
+            return candidate, ""
+    return None, (
+        f"Civ VI is not in {folder}. Choose the folder that holds its Base and DLC folders "
+        f"(for Steam it is usually ...\\steamapps\\common\\{GAME_FOLDER})."
+    )
+
+
+def _chosen_game_dir() -> Path | None:
+    """The install picked in Settings, while it is still there."""
+    from . import settings
+
+    chosen = settings.load().game_dir
+    found, _ = game_dir_from(chosen) if chosen else (None, "")
+    return found
+
+
 def discover(view: WindowsView | None = None) -> GamePaths:
     """Find the game install, the game's user folder (Cache + Logs) and the mod folders."""
     view = view or WindowsView.current()
@@ -421,11 +458,12 @@ def discover(view: WindowsView | None = None) -> GamePaths:
             looked = ", ".join(str(p / "Firaxis Games" / GAME_FOLDER) for p in view.local_appdata) or "%LOCALAPPDATA%"
             raise SetupError(
                 f"Could not find the game's Cache and Logs folder (looked in {looked}). Start Civ VI once, "
-                "or set CIVSPEAK_USER_DIR to the folder that holds Cache and Logs."
+                "or set CIVSPEAK_USER_DIR to the folder that holds Cache and Logs.",
+                "user_dir",
             )
         user = users[0]
 
-    game = _env_dir("CIVSPEAK_GAME_DIR")
+    game = _env_dir("CIVSPEAK_GAME_DIR") or _chosen_game_dir()
     if game is None:
         steam, epic = steam_game_dirs(view), epic_game_dirs(view)
         # The Epic build keeps its own "(Epic)" user folder: when that is the newest, so is the Epic install.
@@ -434,7 +472,9 @@ def discover(view: WindowsView | None = None) -> GamePaths:
             looked = ", ".join(str(p) for p in view.steam_dirs) or "no Steam folder"
             raise SetupError(
                 f"Could not find the Civ VI install (looked in the Steam libraries of {looked}, and in Epic Games). "
-                f"Set CIVSPEAK_GAME_DIR to the folder that contains Base and DLC (usually .../steamapps/common/{GAME_FOLDER})."
+                "Choose its folder in Settings (the one that holds Base and DLC, usually "
+                f".../steamapps/common/{GAME_FOLDER}), or set CIVSPEAK_GAME_DIR to it.",
+                "install",
             )
         game = installs[0]
 

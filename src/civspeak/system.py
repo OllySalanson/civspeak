@@ -100,3 +100,83 @@ def known_folder(folder_id: str) -> Path | None:
 def env_path(name: str) -> Path | None:
     value = os.environ.get(name)
     return Path(value) if value else None
+
+
+# -- Windows Credential Manager ----------------------------------------------------------------
+# A "generic" credential, tied to the player's Windows login and encrypted by Windows; the player can
+# see and remove it in Control Panel > Credential Manager > Windows Credentials.
+
+CRED_TYPE_GENERIC = 1
+CRED_PERSIST_LOCAL_MACHINE = 2  # this PC only, never roamed with the profile
+ERROR_NOT_FOUND = 1168
+
+
+def _credential_api():
+    import ctypes
+    from ctypes import wintypes
+
+    class FILETIME(ctypes.Structure):
+        _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
+
+    class CREDENTIAL(ctypes.Structure):
+        _fields_ = [
+            ("Flags", wintypes.DWORD),
+            ("Type", wintypes.DWORD),
+            ("TargetName", wintypes.LPWSTR),
+            ("Comment", wintypes.LPWSTR),
+            ("LastWritten", FILETIME),
+            ("CredentialBlobSize", wintypes.DWORD),
+            ("CredentialBlob", ctypes.POINTER(ctypes.c_ubyte)),
+            ("Persist", wintypes.DWORD),
+            ("AttributeCount", wintypes.DWORD),
+            ("Attributes", ctypes.c_void_p),
+            ("TargetAlias", wintypes.LPWSTR),
+            ("UserName", wintypes.LPWSTR),
+        ]
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    advapi32.CredReadW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(ctypes.POINTER(CREDENTIAL))]
+    advapi32.CredReadW.restype = wintypes.BOOL
+    advapi32.CredWriteW.argtypes = [ctypes.POINTER(CREDENTIAL), wintypes.DWORD]
+    advapi32.CredWriteW.restype = wintypes.BOOL
+    advapi32.CredDeleteW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD]
+    advapi32.CredDeleteW.restype = wintypes.BOOL
+    advapi32.CredFree.argtypes = [ctypes.c_void_p]
+    return ctypes, CREDENTIAL, advapi32
+
+
+def credential_read(target: str) -> str | None:
+    """The secret saved under `target` in Credential Manager, or None if there is none."""
+    ctypes, CREDENTIAL, advapi32 = _credential_api()
+    found = ctypes.POINTER(CREDENTIAL)()
+    if not advapi32.CredReadW(target, CRED_TYPE_GENERIC, 0, ctypes.byref(found)):
+        if ctypes.get_last_error() == ERROR_NOT_FOUND:
+            return None
+        raise OSError(ctypes.get_last_error(), "Credential Manager could not be read")
+    try:
+        cred = found.contents
+        return ctypes.string_at(cred.CredentialBlob, cred.CredentialBlobSize).decode("utf-8")
+    finally:
+        advapi32.CredFree(found)
+
+
+def credential_write(target: str, secret: str, user: str = "") -> None:
+    """Save `secret` under `target` in Credential Manager, replacing any saved before."""
+    ctypes, CREDENTIAL, advapi32 = _credential_api()
+    blob = secret.encode("utf-8")
+    buffer = (ctypes.c_ubyte * len(blob)).from_buffer_copy(blob)
+    cred = CREDENTIAL()
+    cred.Type = CRED_TYPE_GENERIC
+    cred.TargetName = target
+    cred.CredentialBlobSize = len(blob)
+    cred.CredentialBlob = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte))
+    cred.Persist = CRED_PERSIST_LOCAL_MACHINE
+    cred.UserName = user or None
+    if not advapi32.CredWriteW(ctypes.byref(cred), 0):
+        raise OSError(ctypes.get_last_error(), "Credential Manager could not save it")
+
+
+def credential_delete(target: str) -> None:
+    ctypes, _, advapi32 = _credential_api()
+    if not advapi32.CredDeleteW(target, CRED_TYPE_GENERIC, 0) and ctypes.get_last_error() != ERROR_NOT_FOUND:
+        raise OSError(ctypes.get_last_error(), "Credential Manager could not remove it")

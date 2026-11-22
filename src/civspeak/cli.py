@@ -146,8 +146,10 @@ def cmd_status(args) -> int:
             print(f"Built from the game you loaded at {loaded}; up to date: {not index.is_stale(out, game)}")
     except paths.SetupError as e:
         print(f"Game:       {e}")
-    key = paths.key_file()
-    print(f"API key:    {'present' if key.exists() and key.stat().st_size else 'missing'} ({key})")
+    from . import keys
+
+    store = keys.store()
+    print(f"API key:    {'present' if store.present() else 'missing'} ({store.where})")
     ledger = spend.Ledger(paths.spend_file())
     print(f"Spend:      ${ledger.month_total():.2f} of ${ledger.cap:.2f} this month")
     print(f"Speed:      {latency.summary(latency.LatencyLog(paths.latency_file()).recent(20))} ({paths.latency_file()})")

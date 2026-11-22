@@ -257,3 +257,34 @@ def test_the_server_takes_another_port_only_when_asked(quiet_server):
             httpd.server_close()
     finally:
         taken.close()
+
+
+def test_settings_ask_the_app_for_a_folder_and_start_at_login(made, monkeypatch):
+    a, _, _ = made
+    asked = []
+
+    def dialog(kind):
+        asked.append(kind)
+        return (r"D:\Games\Civ VI",)
+
+    a.window.create_file_dialog = dialog
+    webview = types.SimpleNamespace(FileDialog=types.SimpleNamespace(FOLDER="folder"))
+    desktop = app.Desktop(a, webview)
+    assert desktop.can_choose_folder and desktop.choose_folder() == r"D:\Games\Civ VI" and asked == ["folder"]
+    a.window.create_file_dialog = lambda kind: None  # the player cancelled
+    assert desktop.choose_folder() == ""
+    a.window.create_file_dialog = lambda kind: 1 / 0  # the picker failed: nothing chosen, nothing raised
+    assert desktop.choose_folder() == ""
+    assert not app.Desktop(a, None).can_choose_folder and app.Desktop(a, None).choose_folder() == ""
+    old = types.SimpleNamespace(FOLDER_DIALOG=20)  # pywebview before FileDialog
+    a.window.create_file_dialog = lambda kind: asked.append(kind) or ["C:/Civ"]
+    assert app.Desktop(a, old).choose_folder() == "C:/Civ" and asked[-1] == 20
+
+    runs = {}
+    monkeypatch.setattr(winhelper, "starts_at_login", lambda command: runs.get("Civspeak") == command)
+    monkeypatch.setattr(winhelper, "set_start_at_login", lambda on, command: runs.update(Civspeak=command if on else None))
+    assert not desktop.starts_at_login()
+    desktop.set_start_at_login(True)
+    assert desktop.starts_at_login() and runs["Civspeak"] == a.run_command()
+    desktop.set_start_at_login(False)
+    assert not desktop.starts_at_login()

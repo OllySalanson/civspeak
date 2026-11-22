@@ -1,20 +1,20 @@
 """Short spoken-style answers from Claude, grounded only in the matched Civilopedia entries.
 
-The API key is read only from the anthropic-key file in civspeak's config folder (never from the
-environment, so no other key on this PC can be used by accident) and is never logged or printed.
+The API key comes only from the player's own key store (keys.py: Windows Credential Manager in the
+Windows app, the anthropic-key file elsewhere), never from the environment, so no other key on this
+PC can be used by accident. It is never logged or printed.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import re
-import stat
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import paths, spend
+from . import keys, paths, spend
+from .keys import KeyMissing
 from .search import Hit, entry_text
 
 log = logging.getLogger(__name__)
@@ -43,28 +43,13 @@ How to answer:
 After your answer, on a new final line, write USED: followed by the numbers of the entries your answer relied on, separated by commas (for example "USED: 1, 3"). Write "USED: none" if no entry answered the question. That line is removed before the answer is spoken or shown."""
 
 
-class KeyMissing(RuntimeError):
-    pass
-
-
 class AnswerError(RuntimeError):
     pass
 
 
 def read_key(path: Path | None = None) -> str:
-    """Read the personal API key. Tightens the file to mode 600 if it is readable by others (Linux only:
-    Windows reports every file as 666, and the user's own folder already keeps other users out)."""
-    path = path or paths.key_file()
-    try:
-        mode = path.stat().st_mode
-    except FileNotFoundError:
-        raise KeyMissing(f"No API key yet: {path} does not exist.") from None
-    if mode & (stat.S_IRWXG | stat.S_IRWXO) and os.name != "nt":
-        os.chmod(path, 0o600)
-    key = path.read_text(encoding="utf-8").strip()
-    if not key:
-        raise KeyMissing(f"No API key yet: {path} is empty.")
-    return key
+    """The key from a key file (by default civspeak's own anthropic-key file)."""
+    return keys.read_key_file(path or paths.key_file())
 
 
 def build_user_message(question: str, hits: list[Hit], spoken: bool = False) -> str:
@@ -139,16 +124,16 @@ class SpokenFilter:
 
 
 class Answerer:
-    def __init__(self, ledger: spend.Ledger | None = None, key_path: Path | None = None):
+    def __init__(self, ledger: spend.Ledger | None = None, key_path: Path | None = None, key_store=None):
         self.ledger = ledger or spend.Ledger(paths.spend_file())
-        self.key_path = key_path or paths.key_file()
+        self.keys = key_store or keys.store(key_path)
         self._client = None
         self._client_key_hash = None
 
     def warm_up(self) -> None:
         """Import the client library and set up the client now (about a second), not on the first question."""
         try:
-            self._client_for(read_key(self.key_path))
+            self._client_for(self.keys.read())
         except (KeyMissing, OSError, ImportError):
             pass
 
@@ -167,7 +152,7 @@ class Answerer:
 
         Raises KeyMissing, spend.CapReached or AnswerError before anything is spent.
         """
-        key = read_key(self.key_path)  # before importing Claude's library (a second or more): no key says so at once
+        key = self.keys.read()  # before importing Claude's library (a second or more): no key says so at once
         import anthropic
 
         user = build_user_message(question, hits, spoken)
@@ -198,7 +183,7 @@ class Answerer:
             else:
                 # Rejected before any output: not billed.
                 reservation.settle(0.0, error=type(e).__name__)
-            raise AnswerError(_friendly_error(e, status)) from None
+            raise AnswerError(_friendly_error(e, status, self.keys.where)) from None
 
         cost, usage = _cost(final)
         total = reservation.settle(cost, model=final.model, **usage)
@@ -241,9 +226,11 @@ def _cost(message) -> tuple[float, dict]:
     return cost, totals
 
 
-def _friendly_error(e, status) -> str:
+def _friendly_error(e, status, where: str) -> str:
     if status == 401:
-        return f"The API key was rejected. Check the key in {paths.key_file()}."
+        if where == keys.CredentialKeys.where:
+            return "Claude did not accept the API key. Add it again in Civspeak's Settings."
+        return f"The API key was rejected. Check the key in {where}."
     if status == 403:
         return "The API key is not allowed to use this model."
     if status == 429:
