@@ -86,6 +86,26 @@ jobs:
           $p = Start-Process -FilePath $exe -ArgumentList "--selftest", "--report", "selftest-installed.txt" -Wait -PassThru
           Get-Content selftest-installed.txt
           if ($p.ExitCode -ne 0) { throw "The installed self-test failed ($($p.ExitCode) checks)" }
+
+          # An update, as Civspeak's own updater starts it: over the installed copy, keeping the
+          # player's settings, then starting the new Civspeak by itself.
+          $data = "$env:LOCALAPPDATA\Civspeak"
+          New-Item -ItemType Directory -Force $data | Out-Null
+          '{"cap_usd": 7.5, "answer_model": "best", "setup_done": true}' | Out-File -Encoding ascii "$data\settings.json"
+          $update = Start-Process -FilePath dist\Civspeak-Setup.exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/UPDATE=1", "/LOG=update.log" -Wait -PassThru
+          if ($update.ExitCode -ne 0) { Get-Content update.log; throw "The update failed ($($update.ExitCode))" }
+          $started = $null
+          foreach ($i in 1..30) {
+            $started = Get-Process -Name Civspeak -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }
+            if ($started) { break }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $started) { throw "The update did not start Civspeak again" }
+          Start-Sleep -Seconds 5
+          $started | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          if (-not (Select-String -Path "$data\settings.json" -Pattern '"cap_usd": 7.5' -Quiet)) { throw "The update lost the player's settings" }
+
           $uninstall = Start-Process -FilePath "$env:LOCALAPPDATA\Programs\Civspeak\unins000.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
           if ($uninstall.ExitCode -ne 0) { throw "Uninstall failed ($($uninstall.ExitCode))" }
           Start-Sleep -Seconds 3

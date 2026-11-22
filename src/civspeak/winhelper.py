@@ -287,11 +287,12 @@ WM_OPEN_PAGE = WM_APP + 2  # another copy of the helper was started: show the pa
 WM_QUIT_HELPER = WM_APP + 3  # `civspeak helper uninstall`: turn off
 WM_SERVER = WM_APP + 4  # wParam: one of the SERVER_* below
 WM_UNHEARD = WM_APP + 5  # ` was pressed but no page was listening
+WM_UPDATE = WM_APP + 6  # a newer Civspeak was found: say so by the clock
 SERVER_READY, SERVER_FAILED, SERVER_STOPPED = 1, 2, 3
 
 HOTKEY_ID = 1
 TIMER_ID = 1
-MENU_OPEN, MENU_STARTUP, MENU_OFF = 1, 2, 3
+MENU_OPEN, MENU_STARTUP, MENU_OFF, MENU_UPDATE = 1, 2, 3, 4
 
 
 def _win32():
@@ -556,6 +557,13 @@ class Helper:
         """Close the page and stop the server, when Civspeak is turned off."""
         raise NotImplementedError
 
+    def update_item(self) -> str:
+        """The tray menu's "Install ..." line when a newer Civspeak is ready to install, else ""."""
+        return ""
+
+    def install_update(self) -> None:
+        """Download and install the newer Civspeak (the Windows app only)."""
+
     # -- the hidden window, the tray icon and the menu ----------------------------------------
 
     def run(self) -> int:
@@ -610,6 +618,11 @@ class Helper:
                 return 0
             if msg == WM_QUIT_HELPER:
                 self.turn_off()
+                return 0
+            if msg == WM_UPDATE:
+                label = self.update_item()
+                if label:
+                    self._tray(1, f"{label} is ready. Click the star to install it.")
                 return 0
             if msg == self.taskbar_created:  # Explorer restarted: put the icon back
                 self._tray(0)
@@ -667,6 +680,9 @@ class Helper:
         menu = win.CreatePopupMenu()
         win.AppendMenuW(menu, 0x1, 0, self.status)  # MF_GRAYED: a title line saying how things are
         win.AppendMenuW(menu, 0x800, 0, None)  # MF_SEPARATOR
+        update = self.update_item()
+        if update:
+            win.AppendMenuW(menu, 0, MENU_UPDATE, f"Install {update}")
         win.AppendMenuW(menu, 0, MENU_OPEN, "Open the answer page")
         win.AppendMenuW(menu, 0x8 if starts_at_login(command) else 0, MENU_STARTUP, "Start when I log in")  # MF_CHECKED
         win.AppendMenuW(menu, 0x800, 0, None)
@@ -685,6 +701,8 @@ class Helper:
             set_start_at_login(not starts_at_login(command), command)
         elif choice == MENU_OFF:
             self.turn_off()
+        elif choice == MENU_UPDATE:
+            self.install_update()
 
     # -- the ` key ---------------------------------------------------------------------------
 

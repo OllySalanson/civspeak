@@ -31,7 +31,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import paths, server, system, winhelper
+from . import paths, server, system, updates, winhelper
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +71,7 @@ class App(winhelper.Helper):
         self.shown = False
         self.placed = False
         self.serving = False
+        self.updater = None  # updates.Updater in the packaged app
 
     def run(self) -> int:
         # Normal priority within this below normal process: ` is answered at once even while the game is busy.
@@ -164,9 +165,21 @@ class App(winhelper.Helper):
         win.SetForegroundWindow(self.form_hwnd)
         self.shown = True
 
+    # -- updates -----------------------------------------------------------------------------
+
+    def update_item(self) -> str:
+        release = self.updater.available if self.updater is not None else None
+        return f"Civspeak {release.version}" if release else ""
+
+    def install_update(self) -> None:
+        if self.updater is not None:
+            self.updater.install()
+
     # -- turning off -------------------------------------------------------------------------
 
     def shut_down(self) -> None:
+        if self.updater is not None:
+            self.updater.stop()
         if self.window is not None:
             self.window.destroy()  # the main thread's webview.start() returns
         if self.serving:
@@ -253,6 +266,11 @@ def run(port: int = 8765) -> int:
 
     httpd = server.make_server(port, any_port=True, native=True)
     app = App(httpd, folder)
+    if updates.enabled():
+        app.updater = updates.Updater(folder, turn_off=lambda: app._post(winhelper.WM_QUIT_HELPER))
+        app.updater.on_available.append(lambda release: app._post(winhelper.WM_UPDATE))
+        httpd.state.updater = app.updater
+        app.updater.start()
     webview = _webview()
     if webview is not None:
         os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = " ".join(BROWSER_ARGUMENTS)

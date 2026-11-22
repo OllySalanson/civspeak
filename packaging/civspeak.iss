@@ -32,8 +32,8 @@ UsePreviousTasks=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
-; The running app (or the WSL helper) holds this; Setup asks for it to be closed first.
-AppMutex=Local\CivspeakHelper
+; A running Civspeak (or the WSL helper) holds the Local\CivspeakHelper mutex: InitializeSetup below
+; waits for it to close (an update) or asks the player to turn it off (a normal install).
 CloseApplications=yes
 RestartApplications=no
 OutputDir=..\dist
@@ -71,6 +71,8 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\Civspeak.exe"; Description: "Start Civspeak now"; Flags: postinstall nowait skipifsilent
+; An update started by Civspeak itself (Setup /VERYSILENT /UPDATE=1): start the new one straight away.
+Filename: "{app}\Civspeak.exe"; Flags: nowait; Check: IsUpdate
 
 [UninstallRun]
 ; Forget the Claude key too, when the player chose to remove everything (see below).
@@ -78,8 +80,41 @@ Filename: "{sys}\cmdkey.exe"; Parameters: "/delete:""Civspeak/Claude API key""";
   RunOnceId: "ForgetKey"; Check: RemoveEverything
 
 [Code]
+const
+  CivspeakMutex = 'Local\CivspeakHelper';
+
 var
   RemoveAll: Boolean;
+
+{ Started by Civspeak's own updater, which turns Civspeak off as Setup starts. }
+function IsUpdate(): Boolean;
+begin
+  Result := ExpandConstant('{param:UPDATE|0}') = '1';
+end;
+
+function InitializeSetup(): Boolean;
+var
+  Waited: Integer;
+begin
+  Result := True;
+  if IsUpdate() then begin
+    { Give Civspeak up to a minute to finish turning off. }
+    Waited := 0;
+    while CheckForMutexes(CivspeakMutex) and (Waited < 120) do begin
+      Sleep(500);
+      Waited := Waited + 1;
+    end;
+    Result := not CheckForMutexes(CivspeakMutex);
+    exit;
+  end;
+  while CheckForMutexes(CivspeakMutex) do begin
+    if SuppressibleMsgBox('Civspeak is running. Click the gold star by the clock, choose "Turn off Civspeak", then click Retry.',
+      mbInformation, MB_RETRYCANCEL, IDCANCEL) = IDCANCEL then begin
+      Result := False;
+      exit;
+    end;
+  end;
+end;
 
 { The command line exactly as the app writes it (subprocess.list2cmdline), so its tray menu shows the
   tick: quoted only when the path has a space. }
