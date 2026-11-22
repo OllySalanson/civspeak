@@ -339,7 +339,7 @@ class State:
     def _warm_ears(self) -> None:
         try:
             self.ears.warm_up(self.index)
-        except RuntimeError as e:
+        except (RuntimeError, sqlite3.Error) as e:  # sqlite3: the index was replaced (and closed) meanwhile
             log.warning("%s", e)
 
 
