@@ -375,6 +375,11 @@ def __getattr__(name: str):
     # (tests, the Windows app's analysis) never needs Starlette or Firestore.
     if name == "app":
         logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-        globals()["app"] = make_app()
+        service = Service()
+        # Ready before the first question, not during it: a woken instance starts here (online.py pings
+        # /healthz when a player presses the talk key), and Cloud Run waits for this before sending it any.
+        _ = service.store
+        service.answerer.warm_up()
+        globals()["app"] = make_app(service)
         return globals()["app"]
     raise AttributeError(name)
