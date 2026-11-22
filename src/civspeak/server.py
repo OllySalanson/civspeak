@@ -18,6 +18,11 @@ POST /api/wake           {} -> starts loading the voice and speech recognizer if
 POST /api/mic            {"key": "down"|"up"|"cancel"} the page's microphone button, in the Windows app
 POST /api/hush           {} -> George stops talking, in the Windows app
 POST /api/voice          {"on": true|false} the page's Voice on/off, for questions asked in the Windows app
+GET  /api/settings       what the Settings and first-run screens show (never the key itself)
+POST /api/settings       {"cap_usd": 5 | null, "game_dir": "...", "setup_done": true, "start_at_login": true}
+                           -> {"problem": "" or why it was refused, "settings": ...}
+POST /api/settings/key   {"key": "sk-ant-..."} checked with Claude for free, then kept; {"remove": true} forgets it
+POST /api/settings/folder {} the Windows app asks for the Civ VI folder with a folder picker
 POST /api/models         {} -> fetch George's voice and the speech recognizer (again), in the Windows app;
                            its progress is /api/status's "models"
 """
@@ -44,8 +49,8 @@ from importlib import resources
 from pathlib import Path
 
 from . import index as index_mod
-from . import models, paths, spend, system
-from .answer import Answerer, AnswerError, KeyMissing
+from . import keys, models, paths, settings, spend, system
+from .answer import MODEL, Answerer, AnswerError, KeyMissing
 from .hearing import BadAudio, Ears, Heard
 from .idle import IdleUnloader
 from .latency import LatencyLog
@@ -62,6 +67,18 @@ STATIC = {
     "/recorder.js": ("recorder.js", "text/javascript; charset=utf-8"),
 }
 MAX_QUESTION = 500
+POSTS = (
+    "/api/ask",
+    "/api/hotkey",
+    "/api/wake",
+    "/api/mic",
+    "/api/hush",
+    "/api/voice",
+    "/api/models",
+    "/api/settings",
+    "/api/settings/key",
+    "/api/settings/folder",
+)
 MAX_RECORDING = 4_000_000  # bytes: about two minutes of 16 kHz WAV; the page stops at 15 seconds
 STALE_CHECK_SECONDS = 10
 TALK_PING_SECONDS = 20  # a comment line this often lets a closed page's connection be noticed
@@ -78,6 +95,12 @@ SPOKEN_PROBLEMS = {
     "api": "Claude isn't answering right now. The entries are on screen.",
 }
 NOT_HEARD = "Sorry, I didn't catch that."
+
+# What the Settings screen says when the game is not found (the command line gives the longer story).
+SETUP_PROBLEMS = {
+    "install": "Civspeak could not find Civ VI on this PC. Choose the folder it is installed in.",
+    "user_dir": "Civspeak found no saved Civ VI data yet. Start Civ VI once and load a game, then come back.",
+}
 
 
 class State:
@@ -184,7 +207,6 @@ class State:
         self.check()
         idx = self.index
         meta = idx.meta if idx else {}
-        key = paths.key_file()
         ledger = self.answerer.ledger
         loaded = float(meta["game_loaded_at"]) if meta.get("game_loaded_at") else None
         return {
@@ -195,13 +217,90 @@ class State:
             "building": self.building,
             "build_error": self.build_error,
             "game_language": self.game_language,
-            "key": key.exists() and key.stat().st_size > 0,
+            "key": self.answerer.keys.present(),
             "spent": round(ledger.month_total(), 4),
             "cap": ledger.cap,
             "voice": {"problem": self.voice.problem(), "ready": self.voice.loaded},
             "mic": {"problem": self.ears.problem(), "ready": self.ears.loaded},
             "models": self.download.status() if self.download is not None else None,
         }
+
+    # -- Settings and the first-run screen -------------------------------------------------------
+
+    def settings_view(self, desktop=None) -> dict:
+        """Everything the Settings screen shows. Never the key itself."""
+        chosen = settings.load()
+        game = {"found": "", "user_dir": "", "chosen": chosen.game_dir, "problem": "", "missing": "", "language": ""}
+        try:
+            found = paths.discover()
+            game.update(found=str(found.game_dir), user_dir=str(found.user_dir), language=found.display_language)
+        except paths.SetupError as e:
+            game["problem"] = SETUP_PROBLEMS.get(e.missing, str(e))
+            game["missing"] = e.missing
+        ledger = self.answerer.ledger
+        return {
+            "native": desktop is not None,
+            "setup_needed": desktop is not None and not chosen.setup_done,
+            "key": {"present": self.answerer.keys.present(), "where": self.answerer.keys.where},
+            "console_url": keys.CONSOLE_KEYS_URL,
+            "cap": {
+                "usd": ledger.cap,
+                "default": spend.default_cap(),
+                "chosen": chosen.cap_usd,
+                "from_environment": spend.cap_from_environment() is not None,
+                "spent": round(ledger.month_total(), 4),
+            },
+            "game": game,
+            "models": self.download.status() if self.download is not None else None,
+            "start_at_login": desktop.starts_at_login() if desktop is not None else None,
+            "can_choose_folder": desktop is not None and desktop.can_choose_folder,
+        }
+
+    def save_key(self, text: str, checker=None) -> str:
+        """Check a pasted key with Claude (free) and keep it if it works; "" or what is wrong."""
+        key = keys.tidy(text)
+        problem = (checker or keys.check)(key, MODEL)
+        if problem:
+            return problem
+        self.answerer.keys.save(key)
+        threading.Thread(target=self.answerer.warm_up, name="warm-claude", daemon=True).start()
+        return ""
+
+    def change_settings(self, changes: dict, desktop=None) -> str:
+        """Apply what the Settings screen sent; "" or why it was refused (then nothing changed)."""
+        update = {}
+        if "cap_usd" in changes:
+            cap = changes["cap_usd"]
+            if cap is not None and (isinstance(cap, bool) or not isinstance(cap, (int, float))):
+                return "The monthly limit must be a number of dollars."
+            if cap is not None and not 0 < cap <= settings.MAX_CAP_USD:
+                return f"Choose a monthly limit between $0.01 and ${settings.MAX_CAP_USD:,.0f}."
+            update["cap_usd"] = None if cap is None else round(float(cap), 2)
+        if "game_dir" in changes:
+            chosen = changes["game_dir"]
+            if not isinstance(chosen, str):
+                return "Choose a folder."
+            if chosen.strip():
+                found, problem = paths.game_dir_from(chosen)
+                if problem:
+                    return problem
+                chosen = str(found)
+            update["game_dir"] = chosen.strip()
+        if "setup_done" in changes:
+            update["setup_done"] = changes["setup_done"] is True
+        if "start_at_login" in changes:
+            if desktop is None:
+                return "Start when I log in is a setting of the Windows app."
+            desktop.set_start_at_login(changes["start_at_login"] is True)
+        if update:
+            settings.update(**update)
+        if "cap_usd" in update:
+            self.answerer.ledger.cap = spend.configured_cap()
+        if "game_dir" in update:
+            self.build_error = ""
+            self._last_check = 0.0  # look for the game again now, and build its index if need be
+            self.check()
+        return ""
 
     def warm_up(self) -> None:
         """Get everything a question needs ready in the background, so the first question is not slow:
@@ -295,6 +394,8 @@ class Handler(BaseHTTPRequestHandler):
     state: State  # set by make_server()
     talk: Talk  # set by make_server()
     conversation = None  # the Windows app's own microphone and speakers (conversation.Conversation), set by make_server()
+    key_checker = None  # keys.check unless a test stands in for Claude
+    desktop = None  # the Windows app's folder picker and start-at-login switch (app.Desktop), set by the app
 
     def log_message(self, fmt, *args):  # keep the terminal quiet; never logs bodies
         log.info("%s %s", self.address_string(), fmt % args)
@@ -319,6 +420,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.OK, body, ctype)
         elif path == "/api/status":
             self._json(HTTPStatus.OK, self._status())
+        elif path == "/api/settings":
+            self._json(HTTPStatus.OK, self.state.settings_view(self.desktop))
         elif path == "/api/talk":
             self._talk_stream()
         elif m := SPEECH_URL.match(path):
@@ -379,7 +482,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/listen":
             self._listen(speak="speak=1" in self.path)
             return
-        if path not in ("/api/ask", "/api/hotkey", "/api/wake", "/api/mic", "/api/hush", "/api/voice", "/api/models"):
+        if path not in POSTS:
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         # Only accept requests from our own page and helper (blocks other websites posting to localhost).
@@ -392,6 +495,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/wake":
             self.state.wake()
             self._json(HTTPStatus.OK, {"ok": True})
+            return
+        if path.startswith("/api/settings"):
+            self._settings(path)
             return
         if path == "/api/models":
             download = self.state.download
@@ -428,6 +534,32 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             if speaker:
                 speaker.cancel()
+
+    def _settings(self, path: str) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(min(length, 10_000)) or b"{}")
+            if not isinstance(payload, dict):
+                raise ValueError
+        except ValueError:
+            self._json(HTTPStatus.BAD_REQUEST, {"error": "bad request"})
+            return
+        state, desktop = self.state, self.desktop
+        if path == "/api/settings/key":
+            if payload.get("remove") is True:
+                state.answerer.keys.delete()
+                problem = ""
+            else:
+                problem = state.save_key(str(payload.get("key", ""))[:1000], self.key_checker)
+        elif path == "/api/settings/folder":
+            if desktop is None:
+                self._json(HTTPStatus.NOT_FOUND, {"error": "only the Windows app can show a folder picker"})
+                return
+            folder = desktop.choose_folder()
+            problem = state.change_settings({"game_dir": folder}, desktop) if folder else ""
+        else:
+            problem = state.change_settings(payload, desktop)
+        self._json(HTTPStatus.OK, {"problem": problem, "settings": state.settings_view(desktop)})
 
     def _hotkey(self) -> None:
         try:
@@ -590,7 +722,8 @@ class Answering:
         except KeyMissing:
             self._problem(
                 "no_key",
-                "No Claude API key is set up yet, so there is no spoken answer. The matching Civilopedia entries are below.",
+                "No Claude API key is set up yet, so there is no spoken answer. "
+                "Add one in Settings; the matching Civilopedia entries are below.",
                 speaker,
             )
             return "no_key"

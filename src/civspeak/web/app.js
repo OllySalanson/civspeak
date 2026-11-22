@@ -22,6 +22,7 @@ let voiceProblem = "";
 // the page then only shows what happens, and its microphone button and Voice on/off drive the server's.
 let native = false;
 let answerText = "";
+let shownMicProblem = "";
 
 function show(el, text) {
   el.textContent = text;
@@ -61,10 +62,14 @@ async function refreshStatus() {
       tellVoice();
     }
     showVoice();
+    $("open-settings").classList.toggle("attention", !s.key || s.models?.state === "failed");
     micButton.disabled = Boolean(s.mic.problem);
     micButton.title = s.mic.problem || "Ask out loud: click, or hold ` (the key under Esc)";
     if (s.mic.problem) show(problemEl, s.mic.problem);
-    if (!s.pages || s.building) setTimeout(refreshStatus, 3000);
+    else if (shownMicProblem && problemEl.textContent === shownMicProblem) show(problemEl, "");
+    shownMicProblem = s.mic.problem;
+    // Keep checking while the index is building or George's voice is downloading.
+    if (!s.pages || s.building || s.models?.state === "downloading") setTimeout(refreshStatus, 3000);
   } catch {
     $("source").textContent = "Civspeak is not running.";
     $("source").classList.add("warn");
@@ -549,6 +554,7 @@ for (const b of document.querySelectorAll(".try")) {
 document.addEventListener("pointerdown", () => native || audioContext(), { capture: true });
 
 document.addEventListener("keydown", (ev) => {
+  if (settingsDialog.open) return; // typing in Settings: ` and Esc are the dialog's own
   if (!native) audioContext();
   if (ev.code === "Backquote" && !ev.ctrlKey && !ev.altKey && !ev.metaKey) {
     // Hold ` to talk (tap it to talk until you stop); it never types into the box.
@@ -566,7 +572,7 @@ document.addEventListener("keydown", (ev) => {
 });
 
 document.addEventListener("keyup", (ev) => {
-  if (ev.code !== "Backquote") return;
+  if (ev.code !== "Backquote" || settingsDialog.open) return;
   ev.preventDefault();
   releaseTalk();
 });
@@ -617,6 +623,212 @@ on("question", ({ text }) => {
 for (const name of ["entries", "delta", "done", "problem"]) on(name, (data) => showAnswerEvent(name, data));
 on("speaking", ({ on: speaking }) => setSpeaking(speaking));
 
+// -- Settings, and the first-run screen ------------------------------------------------------
+// The same dialog: on the Windows app's first run it opens by itself as "Set up Civspeak".
+
+const settingsDialog = $("settings");
+let settingsView = null;
+let settingsTimer = 0;
+let setupMode = false;
+
+function mb(n) {
+  return `${Math.round(n / 1e6)} MB`;
+}
+
+function note(id, text, kind = "") {
+  const el = $(id);
+  show(el, text);
+  el.className = `note ${kind}`.trim();
+}
+
+function mark(id, ok) {
+  $(id).classList.toggle("ok", ok === true);
+  $(id).classList.toggle("bad", ok === false);
+}
+
+function renderSettings(v) {
+  settingsView = v;
+  $("console-link").href = v.console_url;
+
+  const key = v.key.present;
+  mark("set-key", key);
+  $("key-state").textContent = key
+    ? `Your key is saved${v.key.where.includes("Credential") ? " in Windows Credential Manager" : ` in ${v.key.where}`}. Paste a new one to replace it.`
+    : "Civspeak asks Claude to answer with your own key. Getting one takes a couple of minutes:";
+  $("key-steps").hidden = key;
+  $("key-remove").hidden = !key;
+  $("key-save").textContent = key ? "Check and replace" : "Check and save";
+
+  const game = v.game;
+  mark("set-game", game.found ? true : false);
+  $("game-state").textContent = game.found
+    ? `${game.chosen ? "Using" : "Found"} ${game.found}.`
+    : game.problem;
+  $("game-state").classList.toggle("bad", !game.found);
+  const english = !game.language || game.language.toLowerCase().startsWith("en");
+  show($("game-language"), english ? "" :
+    `Civspeak speaks English. Your game shows ${game.language}, so George uses the English names and text.`);
+  // The Windows app shows Windows' own folder picker; a browser page takes the folder typed in.
+  $("game-choose").hidden = !v.can_choose_folder;
+  $("game-input").hidden = $("game-save").hidden = v.can_choose_folder || game.missing === "user_dir";
+  if (game.missing === "user_dir") $("game-choose").hidden = true;
+  $("game-auto").hidden = !game.chosen;
+  if (!game.found && !$("game-input").value) $("game-input").value = game.chosen || "";
+
+  const m = v.models;
+  $("set-models").hidden = !m;
+  if (m) {
+    mark("set-models", m.state === "ready" ? true : m.state === "failed" ? false : null);
+    const label = {
+      ready: "Ready. They are kept on this PC, so updates never download them again.",
+      downloading: `Downloading, ${mb(m.done)} of ${mb(m.total)}. Typed questions work meanwhile.`,
+      missing: `Not downloaded yet (${mb(m.total)}).`,
+      failed: `The download stopped: ${m.error}`,
+    }[m.state];
+    $("models-state").textContent = label;
+    $("models-state").classList.toggle("bad", m.state === "failed");
+    $("models-progress").hidden = m.state === "ready";
+    $("models-progress").value = m.total ? m.done / m.total : 0;
+    $("models-retry").hidden = m.state !== "failed" && m.state !== "missing";
+  }
+
+  const cap = v.cap;
+  if (document.activeElement !== $("cap-input")) $("cap-input").value = Number(cap.usd).toFixed(2).replace(/\.00$/, "");
+  $("cap-input").disabled = cap.from_environment;
+  note("cap-note", cap.from_environment
+    ? `Set to ${money(cap.usd)} by CIVSPEAK_MONTHLY_CAP_USD on this PC. ${money(cap.spent)} spent this month.`
+    : `${money(cap.spent)} spent this month. Civspeak stops asking Claude when the limit is reached. ` +
+      "For a second safety net, set a spend limit in the Claude Console as well.");
+
+  $("set-login").hidden = v.start_at_login === null;
+  $("login-box").checked = Boolean(v.start_at_login);
+
+  clearTimeout(settingsTimer);
+  if (settingsDialog.open && m && m.state === "downloading") settingsTimer = setTimeout(loadSettings, 1000);
+}
+
+async function loadSettings() {
+  try {
+    const res = await fetch("/api/settings");
+    renderSettings(await res.json());
+  } catch {
+    // Civspeak went away; the header already says so.
+  }
+}
+
+async function postSettings(path, body) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const out = await res.json();
+  if (out.settings) renderSettings(out.settings);
+  return out.problem ?? out.error ?? "";
+}
+
+function openSettings(setup = false) {
+  setupMode = setup;
+  $("settings-title").textContent = setup ? "Set up Civspeak" : "Settings";
+  $("settings-lead").hidden = !setup;
+  $("settings-done").textContent = setup ? "Start using Civspeak" : "Done";
+  for (const id of ["key-note", "game-note"]) note(id, "");
+  if (!settingsDialog.open) settingsDialog.showModal();
+  loadSettings();
+}
+
+function closeSettings() {
+  clearTimeout(settingsTimer);
+  if (settingsDialog.open) settingsDialog.close();
+}
+
+settingsDialog.addEventListener("close", () => {
+  clearTimeout(settingsTimer);
+  if (setupMode) postSettings("/api/settings", { setup_done: true }); // finished or skipped: it does not come back
+  setupMode = false;
+  refreshStatus();
+  input.focus();
+});
+settingsDialog.addEventListener("click", (ev) => {
+  if (ev.target === settingsDialog) closeSettings(); // a click on the dimmed backdrop
+});
+
+$("open-settings").addEventListener("click", () => openSettings());
+$("settings-close").addEventListener("click", closeSettings);
+$("settings-done").addEventListener("click", closeSettings);
+
+async function busy(button, work) {
+  button.disabled = true;
+  try {
+    return await work();
+  } catch {
+    return "Could not reach Civspeak. Is it still running?";
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function saveKey() {
+  const field = $("key-input");
+  note("key-note", "Checking the key with Claude (this costs nothing)...");
+  const problem = await busy($("key-save"), () => postSettings("/api/settings/key", { key: field.value }));
+  if (problem) {
+    note("key-note", problem, "bad");
+  } else {
+    field.value = "";
+    note("key-note", "Claude accepted the key. It is saved.", "good");
+  }
+}
+$("key-save").addEventListener("click", saveKey);
+$("key-input").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") saveKey();
+});
+$("key-remove").addEventListener("click", async () => {
+  const problem = await busy($("key-remove"), () => postSettings("/api/settings/key", { remove: true }));
+  note("key-note", problem || "The key is removed from this PC.", problem ? "bad" : "");
+});
+
+async function useFolder(work, button) {
+  note("game-note", "");
+  const problem = await busy(button, work);
+  if (problem) note("game-note", problem, "bad");
+  else if (settingsView?.game.found) note("game-note", "Civspeak is reading the Civilopedia from it now.", "good");
+}
+$("game-choose").addEventListener("click", () => useFolder(() => postSettings("/api/settings/folder", {}), $("game-choose")));
+$("game-save").addEventListener("click", () =>
+  useFolder(() => postSettings("/api/settings", { game_dir: $("game-input").value }), $("game-save")));
+$("game-input").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") $("game-save").click();
+});
+$("game-auto").addEventListener("click", async () => {
+  $("game-input").value = "";
+  await useFolder(() => postSettings("/api/settings", { game_dir: "" }), $("game-auto"));
+});
+
+$("models-retry").addEventListener("click", async () => {
+  await busy($("models-retry"), async () => {
+    await post("/api/models", {});
+    await loadSettings();
+    return "";
+  });
+});
+
+$("cap-input").addEventListener("change", async () => {
+  const value = Number($("cap-input").value);
+  if (!(value > 0)) return void loadSettings();
+  const problem = await postSettings("/api/settings", { cap_usd: Math.round(value * 100) / 100 });
+  if (problem) note("cap-note", problem, "bad");
+  else setSpend(settingsView.cap.spent, settingsView.cap.usd);
+});
+
+$("login-box").addEventListener("change", () => postSettings("/api/settings", { start_at_login: $("login-box").checked }));
+
 showVoice();
 
 refreshStatus();
+fetch("/api/settings")
+  .then((res) => res.json())
+  .then((v) => {
+    if (v.setup_needed) openSettings(true);
+  })
+  .catch(() => {});

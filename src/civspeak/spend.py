@@ -22,7 +22,8 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-DEFAULT_CAP_USD = 10.0
+DEFAULT_CAP_USD = 10.0  # the WSL route's limit, as it always was
+APP_DEFAULT_CAP_USD = 5.0  # the Windows app's, for players who have not chosen one
 
 # USD per million tokens: (input, output, cache read, cache write 5 minutes).
 PRICES = {
@@ -92,13 +93,39 @@ def locked_file(f):
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
+def default_cap() -> float:
+    """The limit when the player has chosen none: $5 in the Windows app, $10 in WSL."""
+    from . import paths
+
+    return APP_DEFAULT_CAP_USD if paths.app_dir() is not None else DEFAULT_CAP_USD
+
+
+def cap_from_environment() -> float | None:
+    """CIVSPEAK_MONTHLY_CAP_USD, which wins over Settings when it is set."""
+    try:
+        value = float(os.environ.get("CIVSPEAK_MONTHLY_CAP_USD") or "")
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def configured_cap() -> float:
+    """This month's limit: CIVSPEAK_MONTHLY_CAP_USD, else the one chosen in Settings, else the default."""
+    from . import settings
+
+    env = cap_from_environment()
+    if env is not None:
+        return env
+    chosen = settings.load().cap_usd
+    return float(chosen) if chosen is not None else default_cap()
+
+
 class Ledger:
     _lock = threading.Lock()
 
     def __init__(self, path: Path, cap: float | None = None):
         self.path = path
-        env_cap = os.environ.get("CIVSPEAK_MONTHLY_CAP_USD")
-        self.cap = cap if cap is not None else float(env_cap) if env_cap else DEFAULT_CAP_USD
+        self.cap = cap if cap is not None else configured_cap()
 
     @contextmanager
     def _locked(self):

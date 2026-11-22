@@ -14,6 +14,10 @@
       <span id="source" class="chip">Loading the Civilopedia...</span>
       <span id="spend" class="chip" hidden></span>
       <button id="voice" type="button" class="chip toggle" aria-pressed="true">Voice on</button>
+      <button id="open-settings" type="button" class="chip toggle settings-chip">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.6M12 18.6v2.6M21.2 12h-2.6M5.4 12H2.8M18.5 5.5l-1.8 1.8M7.3 16.7l-1.8 1.8M18.5 18.5l-1.8-1.8M7.3 7.3 5.5 5.5"/></svg>
+        Settings
+      </button>
     </div>
   </header>
 
@@ -55,6 +59,75 @@
       </p>
     </section>
   </main>
+
+  <dialog id="settings" class="settings" aria-labelledby="settings-title">
+    <div class="settings-head">
+      <h2 id="settings-title">Settings</h2>
+      <button id="settings-close" type="button" class="icon-button" aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </div>
+    <p id="settings-lead" class="lead" hidden>Three things and Civspeak is ready: your Claude key, your game, and George's voice.</p>
+
+    <section class="setting" id="set-key" aria-labelledby="key-title">
+      <h3 id="key-title"><span class="tick" aria-hidden="true"></span>Claude API key</h3>
+      <p id="key-state" class="state"></p>
+      <ol id="key-steps" class="steps">
+        <li>Open the <a id="console-link" href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Claude Console</a> and sign in, or sign up.</li>
+        <li>Under <strong>Billing</strong>, add a little credit: Civspeak pays for each answer from it.</li>
+        <li>Under <strong>API keys</strong>, create a key, copy it and paste it here.</li>
+      </ol>
+      <div class="row">
+        <label for="key-input" class="visually-hidden">Claude API key</label>
+        <input id="key-input" type="password" placeholder="sk-ant-..." autocomplete="off" spellcheck="false" autofocus>
+        <button id="key-save" type="button" class="primary">Check and save</button>
+      </div>
+      <p id="key-note" class="note" hidden></p>
+      <button id="key-remove" type="button" class="link" hidden>Remove the key from this PC</button>
+    </section>
+
+    <section class="setting" id="set-game" aria-labelledby="game-title">
+      <h3 id="game-title"><span class="tick" aria-hidden="true"></span>Civilization VI</h3>
+      <p id="game-state" class="state"></p>
+      <p id="game-language" class="note" hidden></p>
+      <div class="row" id="game-pick">
+        <button id="game-choose" type="button">Choose folder...</button>
+        <label for="game-input" class="visually-hidden">Civ VI folder</label>
+        <input id="game-input" type="text" placeholder="C:\...\steamapps\common\Sid Meier's Civilization VI" spellcheck="false">
+        <button id="game-save" type="button">Use this folder</button>
+      </div>
+      <p id="game-note" class="note" hidden></p>
+      <button id="game-auto" type="button" class="link" hidden>Find it by itself again</button>
+    </section>
+
+    <section class="setting" id="set-models" aria-labelledby="models-title" hidden>
+      <h3 id="models-title"><span class="tick" aria-hidden="true"></span>George's voice and speech recognition</h3>
+      <p id="models-state" class="state"></p>
+      <progress id="models-progress" max="1" value="0"></progress>
+      <button id="models-retry" type="button" hidden>Try again</button>
+    </section>
+
+    <section class="setting" id="set-cap" aria-labelledby="cap-title">
+      <h3 id="cap-title">Monthly spending limit</h3>
+      <div class="row">
+        <span class="money-input">
+          <span aria-hidden="true">$</span>
+          <label for="cap-input" class="visually-hidden">Monthly limit in dollars</label>
+          <input id="cap-input" type="number" min="0.5" max="1000" step="0.5" inputmode="decimal">
+        </span>
+        <span>a month</span>
+      </div>
+      <p id="cap-note" class="note"></p>
+    </section>
+
+    <section class="setting" id="set-login" hidden>
+      <label class="check"><input id="login-box" type="checkbox"> Start Civspeak when I log in to Windows</label>
+    </section>
+
+    <div class="settings-foot">
+      <button id="settings-done" type="button" class="primary">Done</button>
+    </div>
+  </dialog>
 
   <template id="card">
     <article class="card">

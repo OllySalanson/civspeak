@@ -174,6 +174,39 @@ class App(winhelper.Helper):
         self.httpd.server_close()
 
 
+class Desktop:
+    """What the page's Settings screen may ask of the Windows app (server.Handler.desktop): a folder
+    picker for the Civ VI install, and the start-at-login switch the tray menu also has."""
+
+    def __init__(self, app: App, webview=None):
+        self.app = app
+        self.webview = webview
+
+    @property
+    def can_choose_folder(self) -> bool:
+        return self.webview is not None and self.app.window is not None
+
+    def choose_folder(self) -> str:
+        """The folder the player picked, or "" if they cancelled (or no window can show the picker)."""
+        if not self.can_choose_folder:
+            return ""
+        kind = getattr(getattr(self.webview, "FileDialog", None), "FOLDER", None)
+        if kind is None:
+            kind = self.webview.FOLDER_DIALOG
+        try:
+            picked = self.app.window.create_file_dialog(kind)
+        except Exception:
+            log.exception("The folder picker could not be shown")
+            return ""
+        return str(picked[0]) if picked else ""
+
+    def starts_at_login(self) -> bool:
+        return winhelper.starts_at_login(self.app.run_command())
+
+    def set_start_at_login(self, on: bool) -> None:
+        winhelper.set_start_at_login(on, self.app.run_command())
+
+
 def _webview():
     """pywebview, when it can show the page with WebView2 here; None otherwise."""
     try:
@@ -237,6 +270,7 @@ def run(port: int = 8765) -> int:
             zoomable=True,
         )
         app.window.events.before_show += lambda: app.attach(app.window.native)
+    httpd.RequestHandlerClass.desktop = Desktop(app, webview)
     tray = threading.Thread(target=app.run, name="tray")
     tray.start()
     if webview is None:
