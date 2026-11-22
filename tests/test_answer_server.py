@@ -48,6 +48,7 @@ class FakeClient:
 
     def _stream(self, **kwargs):
         self.calls.append(kwargs)
+        self._final.model = kwargs["model"]  # answered by the model asked (no fallback in these tests)
         return FakeStream(self._chunks, self._final)
 
 
@@ -202,3 +203,45 @@ def test_status_and_non_json_posts_are_refused(running, tmp_path, key_file):
     with pytest.raises(urllib.error.HTTPError) as e:
         urllib.request.urlopen(req, timeout=5)
     assert e.value.code == 415
+
+
+@pytest.mark.parametrize(
+    ("choice", "model", "fallback"),
+    [("quick", "claude-haiku-5-5", False), ("balanced", "claude-sonnet-5-5", True), ("best", "claude-opus-5-5", True)],
+)
+def test_each_answer_model_is_asked_and_charged_its_own_way(tmp_path, key_file, choice, model, fallback):
+    ledger = spend.Ledger(tmp_path / "spend.jsonl")
+    a = Answerer(ledger, key_file, choice=choice)
+    fake = FakeClient(["Yes.", "\nUSED: 1"])
+    a._client_for = lambda key: fake
+    result = list(a.stream("q", [hit()]))[-1][1]
+    call = fake.calls[0]
+    assert call["model"] == model and call["output_config"] == {"effort": "low"}
+    # Haiku 5.5 has no server-side fallback, so it is never asked for one.
+    assert ("fallbacks" in call, "betas" in call) == (fallback, fallback)
+    assert result.cost_usd == pytest.approx(spend.cost_usd(model, 1000, 100, 800, 0))
+
+
+def test_the_answer_model_follows_settings_and_each_routes_default(monkeypatch, tmp_path):
+    from civspeak import settings, system
+
+    monkeypatch.delenv("CIVSPEAK_ANSWERS", raising=False)
+    assert answer.configured_choice() == "best"  # WSL: the captain keeps Opus
+    monkeypatch.setattr(system, "IS_WINDOWS", True)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    assert answer.configured_choice() == "quick"  # the Windows app's players
+    settings.update(answer_model="balanced")
+    assert answer.configured_choice() == "balanced"
+    settings.update(answer_model="nonsense")
+    assert answer.configured_choice() == "quick"
+    monkeypatch.setenv("CIVSPEAK_ANSWERS", "best")
+    assert answer.configured_choice() == "best"
+
+
+def test_a_haiku_question_reserves_only_haikus_worst_case(tmp_path, key_file):
+    ledger = spend.Ledger(tmp_path / "spend.jsonl", cap=0.01)  # far too little for an Opus worst case
+    a = Answerer(ledger, key_file, choice="quick")
+    a._client_for = lambda key: FakeClient(["Yes.", "\nUSED: 1"])
+    assert list(a.stream("q", [hit()]))[-1][0] == "done"
+    with pytest.raises(spend.CapReached):
+        list(Answerer(ledger, key_file, choice="best").stream("q", [hit()]))

@@ -48,3 +48,15 @@ def test_cap_from_environment(tmp_path, monkeypatch):
     assert spend.Ledger(tmp_path / "s.jsonl").cap == 2.5
     monkeypatch.delenv("CIVSPEAK_MONTHLY_CAP_USD")
     assert spend.Ledger(tmp_path / "s.jsonl").cap == 10.0
+
+
+def test_cheaper_models_prices_and_their_own_worst_case():
+    assert spend.cost_usd("claude-sonnet-5-5", 1_000_000, 1_000_000) == pytest.approx(12.0)
+    assert spend.cost_usd("claude-haiku-5-5", 100_000, 100_000) == pytest.approx(0.06)
+    assert spend.cost_usd("claude-haiku-5-5", cache_read=100_000) == pytest.approx(0.001)
+    # Haiku's long-prompt rate card, above 100K tokens of prompt.
+    assert spend.cost_usd("claude-haiku-5-5", 200_000, 1000) == pytest.approx(200_000 * 0.50 / 1e6 + 1000 * 2.50 / 1e6)
+    # No fallback: the worst case is at Haiku's own prices; with one, at the dearest any model could charge.
+    haiku = spend.worst_case_usd(5000, 2000, "claude-haiku-5-5")
+    assert haiku == pytest.approx((5000 * 0.125 + 2000 * 0.50) / 1e6)
+    assert spend.worst_case_usd(5000, 2000) >= 100 * haiku

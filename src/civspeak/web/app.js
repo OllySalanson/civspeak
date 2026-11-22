@@ -692,6 +692,13 @@ function renderSettings(v) {
     $("models-retry").hidden = m.state !== "failed" && m.state !== "missing";
   }
 
+  const answers = v.answers;
+  for (const radio of document.querySelectorAll('input[name="answers"]')) {
+    radio.checked = radio.value === answers.choice;
+    radio.disabled = answers.from_environment;
+  }
+  if (answers.from_environment) note("answers-note", "Set by CIVSPEAK_ANSWERS on this PC.");
+
   const cap = v.cap;
   if (document.activeElement !== $("cap-input")) $("cap-input").value = Number(cap.usd).toFixed(2).replace(/\.00$/, "");
   $("cap-input").disabled = cap.from_environment;
@@ -820,6 +827,13 @@ $("cap-input").addEventListener("change", async () => {
   if (problem) note("cap-note", problem, "bad");
   else setSpend(settingsView.cap.spent, settingsView.cap.usd);
 });
+
+for (const radio of document.querySelectorAll('input[name="answers"]')) {
+  radio.addEventListener("change", async () => {
+    const problem = await postSettings("/api/settings", { answer_model: radio.value });
+    note("answers-note", problem, problem ? "bad" : "");
+  });
+}
 
 $("login-box").addEventListener("change", () => postSettings("/api/settings", { start_at_login: $("login-box").checked }));
 

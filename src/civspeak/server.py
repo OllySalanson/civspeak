@@ -19,7 +19,8 @@ POST /api/mic            {"key": "down"|"up"|"cancel"} the page's microphone but
 POST /api/hush           {} -> George stops talking, in the Windows app
 POST /api/voice          {"on": true|false} the page's Voice on/off, for questions asked in the Windows app
 GET  /api/settings       what the Settings and first-run screens show (never the key itself)
-POST /api/settings       {"cap_usd": 5 | null, "game_dir": "...", "setup_done": true, "start_at_login": true}
+POST /api/settings       {"cap_usd": 5 | null, "game_dir": "...", "answer_model": "quick" | "balanced" | "best",
+                          "setup_done": true, "start_at_login": true}
                            -> {"problem": "" or why it was refused, "settings": ...}
 POST /api/settings/key   {"key": "sk-ant-..."} checked with Claude for free, then kept; {"remove": true} forgets it
 POST /api/settings/folder {} the Windows app asks for the Civ VI folder with a folder picker
@@ -48,9 +49,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 
+from . import answer as answer_mod
 from . import index as index_mod
 from . import keys, models, paths, settings, spend, system
-from .answer import MODEL, Answerer, AnswerError, KeyMissing
+from .answer import Answerer, AnswerError, KeyMissing
 from .hearing import BadAudio, Ears, Heard
 from .idle import IdleUnloader
 from .latency import LatencyLog
@@ -251,6 +253,12 @@ class State:
                 "spent": round(ledger.month_total(), 4),
             },
             "game": game,
+            "answers": {
+                "choice": answer_mod.configured_choice(),
+                "default": answer_mod.default_choice(),
+                "from_environment": bool(os.environ.get("CIVSPEAK_ANSWERS")),
+                "options": [{"id": k, "label": c.label, "model": c.model} for k, c in answer_mod.CHOICES.items()],
+            },
             "models": self.download.status() if self.download is not None else None,
             "start_at_login": desktop.starts_at_login() if desktop is not None else None,
             "can_choose_folder": desktop is not None and desktop.can_choose_folder,
@@ -259,7 +267,7 @@ class State:
     def save_key(self, text: str, checker=None) -> str:
         """Check a pasted key with Claude (free) and keep it if it works; "" or what is wrong."""
         key = keys.tidy(text)
-        problem = (checker or keys.check)(key, MODEL)
+        problem = (checker or keys.check)(key, answer_mod.CHOICES[answer_mod.configured_choice()].model)
         if problem:
             return problem
         self.answerer.keys.save(key)
@@ -286,6 +294,11 @@ class State:
                     return problem
                 chosen = str(found)
             update["game_dir"] = chosen.strip()
+        if "answer_model" in changes:
+            choice = changes["answer_model"]
+            if choice not in answer_mod.CHOICES:
+                return "Choose Quick, Balanced or Best."
+            update["answer_model"] = choice
         if "setup_done" in changes:
             update["setup_done"] = changes["setup_done"] is True
         if "start_at_login" in changes:

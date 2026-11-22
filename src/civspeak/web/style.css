@@ -312,6 +312,18 @@ kbd {
 .settings progress::-webkit-progress-value { background: var(--gold); border-radius: 999px; transition: width 0.4s; }
 #models-retry { margin-top: 10px; }
 
+.choices { margin: 4px 0 0; padding: 0; border: 0; display: grid; gap: 8px; }
+.choice {
+  display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--bg);
+}
+.choice:hover { border-color: rgba(224, 187, 99, 0.5); }
+.choice:has(input:checked) { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold) inset; }
+.choice input { flex: none; width: 18px; height: 18px; margin: 3px 0 0; accent-color: var(--gold); }
+.choice strong { font-weight: 600; }
+.choice .model { margin-left: 6px; font-size: 14px; color: var(--muted); }
+.choice .about { display: block; font-size: 15px; color: #d6deeb; }
+
 .check { display: flex; align-items: center; gap: 10px; cursor: pointer; }
 .check input { width: 18px; height: 18px; accent-color: var(--gold); }
 

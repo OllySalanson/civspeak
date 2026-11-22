@@ -63,7 +63,7 @@ This is the only part that needs a terminal (WSL, in this folder), and only once
 ### On the answer page
 
 George (Kokoro's `bm_george` voice at 0.92 speed) reads out a one to three sentence answer
-written by Claude Opus 5.5 from the matched entries only, starting as soon as the first sentence
+written by Claude from the matched entries only (the model is chosen in Settings, below), starting as soon as the first sentence
 is written. The entry cards appear underneath (the ones the answer used are marked), and what it
 heard you say is in the question box.
 
@@ -146,7 +146,8 @@ py -m venv %LOCALAPPDATA%\Civspeak\venv
   choose another limit in Settings. It is tracked locally in `spend.jsonl` in the data folder. Each
   question reserves its worst-case cost before calling Claude, so the cap cannot be exceeded. When
   the cap is reached the page says "Monthly limit reached" and keeps showing entries. A typical
-  answer costs about 2 cents. (`CIVSPEAK_MONTHLY_CAP_USD` wins over Settings.)
+  answer costs about 2 cents on Best and well under a tenth of a cent on Quick.
+  (`CIVSPEAK_MONTHLY_CAP_USD` wins over Settings.)
 
 ### Where things live
 
@@ -185,8 +186,16 @@ Documents from Windows itself.
 - **Search:** page names and the Civilopedia's own search terms are matched exactly, fuzzily
   ("zigurat") and by sound ("hanza" finds Hansa), combined with full-text search. Placement
   questions also bring in the general rules page (for example the Districts concept page).
-- **Answer:** the top entries go to Claude Opus 5.5 (low effort, prompt caching on the fixed
-  instructions, server-side refusal fallback) with instructions to answer only from them.
+- **Answer:** the top entries go to Claude (low effort, prompt caching on the fixed instructions)
+  with instructions to answer only from them. **Settings > Answers** picks the model:
+  **Quick** (Claude Haiku 5.5, the Windows app's default), **Balanced** (Claude Sonnet 5.5) or
+  **Best** (Claude Opus 5.5, the WSL route's default); `CIVSPEAK_ANSWERS=quick|balanced|best`
+  overrides it. Balanced and Best hand a declined question to another model (server-side refusal
+  fallback); Haiku has none, so a question it declines gets no answer.
+  `tools/answer_check.py` asks 30 questions of each model and writes the answers side by side
+  (real calls, under $1 in all). On 22 Nov 2026 an answer cost about 0.05 cents on Quick, 0.7 cents
+  on Balanced and 1.5 cents on Best; Best and Balanced were right every time or nearly, and Quick
+  on about 26 of 30.
 - **Listening:** the page records the microphone as 16 kHz audio and sends it to the local server,
   where Whisper base.en turns it into text on the CPU. (The Windows app records it itself instead,
   see below.) Whisper is given a hint list of about 90
@@ -258,7 +267,7 @@ per user, no administrator prompt), installs it silently, runs the self-test aga
 
 `tools/voice_check.py` tests the whole spoken path without a person: Kokoro says each question in
 a different voice and it goes through the microphone's endpoints of a running server, with timings.
-Each question is a real Claude call (about 2 cents):
+Each question is a real Claude call (about 2 cents on Best):
 
 ```sh
 .venv/bin/python tools/voice_check.py "Where can I build a Campus?" "Tell me about Kongo."

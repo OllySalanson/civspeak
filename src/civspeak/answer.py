@@ -8,6 +8,7 @@ PC can be used by accident. It is never logged or printed.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -19,7 +20,40 @@ from .search import Hit, entry_text
 
 log = logging.getLogger(__name__)
 
-MODEL = "claude-opus-5-5"
+MODEL = "claude-opus-5-5"  # the best answers: the WSL route's model, and the "best" choice
+
+
+@dataclass(frozen=True)
+class Choice:
+    """A model the player can pick in Settings ("Answers")."""
+
+    model: str
+    label: str
+    fallback: bool  # whether Claude may hand a declined question to another model (server-side fallback)
+
+
+# Haiku 5.5 has no server-side fallback, so a question it declines is simply not answered.
+CHOICES = {
+    "quick": Choice("claude-haiku-5-5", "Quick", fallback=False),
+    "balanced": Choice("claude-sonnet-5-5", "Balanced", fallback=True),
+    "best": Choice(MODEL, "Best", fallback=True),
+}
+APP_DEFAULT_CHOICE = "quick"  # the Windows app's players: cheap and fast (decided 23 Oct 2026)
+DEFAULT_CHOICE = "best"  # WSL, the captain's own route, as it always was
+
+
+def default_choice() -> str:
+    return APP_DEFAULT_CHOICE if paths.app_dir() is not None else DEFAULT_CHOICE
+
+
+def configured_choice() -> str:
+    """The "Answers" choice from Settings (CIVSPEAK_ANSWERS overrides it), else this route's default."""
+    from . import settings
+
+    chosen = os.environ.get("CIVSPEAK_ANSWERS") or settings.load().answer_model
+    return chosen if chosen in CHOICES else default_choice()
+
+
 API_URL = "https://api.anthropic.com"
 MAX_TOKENS = 2000  # thinking at low effort plus a 1-3 sentence answer
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
@@ -124,8 +158,9 @@ class SpokenFilter:
 
 
 class Answerer:
-    def __init__(self, ledger: spend.Ledger | None = None, key_path: Path | None = None, key_store=None):
+    def __init__(self, ledger: spend.Ledger | None = None, key_path: Path | None = None, key_store=None, choice: str = ""):
         self.ledger = ledger or spend.Ledger(paths.spend_file())
+        self.choice = choice  # "" follows Settings, read again for every question
         self.keys = key_store or keys.store(key_path)
         self._client = None
         self._client_key_hash = None
@@ -155,17 +190,21 @@ class Answerer:
         key = self.keys.read()  # before importing Claude's library (a second or more): no key says so at once
         import anthropic
 
+        choice = CHOICES[self.choice if self.choice in CHOICES else configured_choice()]
         user = build_user_message(question, hits, spoken)
-        reserve = spend.worst_case_usd(estimate_tokens(SYSTEM_PROMPT + user), MAX_TOKENS)
+        reserve = spend.worst_case_usd(
+            estimate_tokens(SYSTEM_PROMPT + user), MAX_TOKENS, None if choice.fallback else choice.model
+        )
         reservation = self.ledger.reserve(reserve)
         client = self._client_for(key)
         speakable = SpokenFilter()
+        # A declined question goes on to another model where Claude offers that (Opus and Sonnet).
+        fallback = {"betas": [FALLBACK_BETA], "fallbacks": "default"} if choice.fallback else {}
         try:
             with client.beta.messages.stream(
-                model=MODEL,
+                model=choice.model,
                 max_tokens=MAX_TOKENS,
-                betas=[FALLBACK_BETA],
-                fallbacks="default",
+                **fallback,
                 output_config={"effort": "low"},
                 system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content": user}],
@@ -185,7 +224,7 @@ class Answerer:
                 reservation.settle(0.0, error=type(e).__name__)
             raise AnswerError(_friendly_error(e, status, self.keys.where)) from None
 
-        cost, usage = _cost(final)
+        cost, usage = _cost(final, choice.model)
         total = reservation.settle(cost, model=final.model, **usage)
         text = "".join(b.text for b in final.content if getattr(b, "type", "") == "text")
         answer, used = split_used(text)
@@ -200,7 +239,7 @@ class Answerer:
         yield "done", Result(answer, [u for u in used if 1 <= u <= len(hits)], cost, total, final.model, usage, refused)
 
 
-def _cost(message) -> tuple[float, dict]:
+def _cost(message, asked: str = MODEL) -> tuple[float, dict]:
     usage = message.usage
     iterations = getattr(usage, "iterations", None) or []
     totals = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
@@ -208,7 +247,7 @@ def _cost(message) -> tuple[float, dict]:
     entries = iterations or [usage]
     for it in entries:
         served_by_fallback = getattr(it, "type", "") == "fallback_message"
-        model = message.model if served_by_fallback else MODEL
+        model = message.model if served_by_fallback else asked
         counts = {k: int(getattr(it, k, 0) or 0) for k in totals}
         for k, v in counts.items():
             totals[k] += v
@@ -221,7 +260,7 @@ def _cost(message) -> tuple[float, dict]:
                 counts["cache_read_input_tokens"],
                 counts["cache_creation_input_tokens"],
             )
-            for m in {model, message.model, MODEL}
+            for m in {model, message.model, asked}
         )
     return cost, totals
 
