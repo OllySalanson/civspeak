@@ -321,3 +321,16 @@ def test_the_folder_picker_is_only_the_windows_apps(settings_server):
     with pytest.raises(urllib.error.HTTPError) as refused:
         post(f"{url}/api/settings/folder", {})
     assert refused.value.code == 404
+
+
+def test_the_answers_choice_is_shown_and_kept(settings_server, monkeypatch):
+    monkeypatch.delenv("CIVSPEAK_ANSWERS", raising=False)
+    start, state, store, checked = settings_server
+    url = start()
+    answers = get(f"{url}/api/settings")["answers"]
+    assert answers["choice"] == answers["default"] == "best" and answers["from_environment"] is False
+    assert [o["id"] for o in answers["options"]] == ["quick", "balanced", "best"]
+    assert post(f"{url}/api/settings", {"answer_model": "quick"})["settings"]["answers"]["choice"] == "quick"
+    assert post(f"{url}/api/settings", {"answer_model": "fastest"})["problem"] == "Choose Quick, Balanced or Best."
+    post(f"{url}/api/settings/key", {"key": GOOD_KEY})
+    assert checked[-1] == (GOOD_KEY, "claude-haiku-5-5")  # the key is checked against the model it will use

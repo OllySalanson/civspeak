@@ -25,12 +25,19 @@ from pathlib import Path
 DEFAULT_CAP_USD = 10.0  # the WSL route's limit, as it always was
 APP_DEFAULT_CAP_USD = 5.0  # the Windows app's, for players who have not chosen one
 
-# USD per million tokens: (input, output, cache read, cache write 5 minutes).
+# USD per million tokens: (input, output, cache read, cache write 5 minutes). Claude API reference,
+# cached 3 Nov 2026.
 PRICES = {
     "claude-opus-5-5": (4.00, 20.00, 0.20, 5.00),
+    "claude-sonnet-5-5": (2.00, 10.00, 0.10, 2.50),
+    "claude-haiku-5-5": (0.10, 0.50, 0.01, 0.125),
     "claude-opus-5": (5.00, 25.00, 0.50, 6.25),
     "claude-opus-4-8": (5.00, 25.00, 0.50, 6.25),
 }
+# Haiku 5.5 charges five times as much when a prompt is longer than 100K tokens (Civspeak's are
+# about 5K, but the ledger must never under-count).
+LONG_PROMPT_TOKENS = 100_000
+LONG_PROMPT_PRICES = {"claude-haiku-5-5": (0.50, 2.50, 0.05, 0.625)}
 # Anything unrecognised (for example a fallback model) is charged at a deliberately high rate.
 UNKNOWN_PRICE = (10.00, 50.00, 1.00, 12.50)
 
@@ -46,19 +53,22 @@ def month_key(t: float | None = None) -> str:
     return time.strftime("%Y-%m", time.localtime(t if t is not None else time.time()))
 
 
-def price(model: str | None) -> tuple[float, float, float, float]:
+def price(model: str | None, prompt_tokens: int = 0) -> tuple[float, float, float, float]:
+    if prompt_tokens > LONG_PROMPT_TOKENS and model in LONG_PROMPT_PRICES:
+        return LONG_PROMPT_PRICES[model]
     return PRICES.get(model or "", UNKNOWN_PRICE)
 
 
 def cost_usd(model: str | None, input_tokens=0, output_tokens=0, cache_read=0, cache_write=0) -> float:
-    p_in, p_out, p_read, p_write = price(model)
+    p_in, p_out, p_read, p_write = price(model, input_tokens + cache_read + cache_write)
     return (input_tokens * p_in + output_tokens * p_out + cache_read * p_read + cache_write * p_write) / 1_000_000
 
 
-def worst_case_usd(input_tokens: int, max_output_tokens: int) -> float:
-    """Upper bound for one call: every input token written to cache, every output token used, at the
-    highest price any model in the fallback chain could charge."""
-    p_in, p_out, _, p_write = UNKNOWN_PRICE
+def worst_case_usd(input_tokens: int, max_output_tokens: int, model: str | None = None) -> float:
+    """Upper bound for one call: every input token written to cache and every output token used, at
+    `model`'s own prices when nothing else can answer instead (no fallback), otherwise at the highest
+    price any model in a fallback chain could charge."""
+    p_in, p_out, _, p_write = price(model, input_tokens) if model in PRICES else UNKNOWN_PRICE
     return (input_tokens * max(p_in, p_write) + max_output_tokens * p_out) / 1_000_000
 
 

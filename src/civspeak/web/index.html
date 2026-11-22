@@ -107,6 +107,22 @@
       <button id="models-retry" type="button" hidden>Try again</button>
     </section>
 
+    <section class="setting" id="set-answers" aria-labelledby="answers-title">
+      <h3 id="answers-title">Answers</h3>
+      <fieldset class="choices" aria-labelledby="answers-title">
+        <label class="choice"><input type="radio" name="answers" value="quick">
+          <span><strong>Quick</strong> <span class="model">Claude Haiku 5.5</span>
+            <span class="about">Fastest and cheapest: well under a tenth of a cent an answer. Now and then it gets a detail wrong.</span></span></label>
+        <label class="choice"><input type="radio" name="answers" value="balanced">
+          <span><strong>Balanced</strong> <span class="model">Claude Sonnet 5.5</span>
+            <span class="about">Careful answers for about 1 cent each.</span></span></label>
+        <label class="choice"><input type="radio" name="answers" value="best">
+          <span><strong>Best</strong> <span class="model">Claude Opus 5.5</span>
+            <span class="about">The most careful answers, for about 2 cents each.</span></span></label>
+      </fieldset>
+      <p id="answers-note" class="note" hidden></p>
+    </section>
+
     <section class="setting" id="set-cap" aria-labelledby="cap-title">
       <h3 id="cap-title">Monthly spending limit</h3>
       <div class="row">

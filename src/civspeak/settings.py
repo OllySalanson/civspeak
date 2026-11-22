@@ -26,6 +26,7 @@ class Settings:
     cap_usd: float | None = None  # None: the default (spend.default_cap)
     game_dir: str = ""  # the Civ VI install chosen by hand; "" means found by itself
     setup_done: bool = False  # the first-run screen was finished (or skipped)
+    answer_model: str = ""  # "quick", "balanced" or "best" (answer.CHOICES); "" means this route's default
 
 
 def path() -> Path:
@@ -49,6 +50,8 @@ def load() -> Settings:
     if not isinstance(out.game_dir, str):
         out.game_dir = ""
     out.setup_done = out.setup_done is True
+    if not isinstance(out.answer_model, str):
+        out.answer_model = ""
     return out
 
 
