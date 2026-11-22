@@ -3,8 +3,12 @@
 #
 #   service/deploy.sh setup   once: Firestore, its expiry policies, the service account, the image repository
 #   service/deploy.sh key     store (or replace) the key from ~/.config/civspeak/answer-service-key as a secret
-#   service/deploy.sh         build the image and deploy it (the limits below; raised IDs are kept)
-#   service/deploy.sh raise CS-XXXX-XXXX-XXXX 500
+#   service/deploy.sh limits DAILY IP_DAILY CAP_USD
+#                             set the limits: questions a day per install, per internet address, and the
+#                             hard monthly cap in dollars. They live only in the service's settings,
+#                             never in this repository.
+#   service/deploy.sh         build the image and deploy it (the limits and raised IDs are kept)
+#   service/deploy.sh raise CS-XXXX-XXXX-XXXX N
 #                             give one install a higher daily limit (no code change, no rebuild)
 #
 # Run from the repository root. The key is never printed: it goes to Secret Manager on standard input.
@@ -18,10 +22,6 @@ SECRET=civspeak-answer-key
 REPOSITORY=civspeak
 IMAGE="$REGION-docker.pkg.dev/$PROJECT/$REPOSITORY/$SERVICE"
 KEY_FILE="$HOME/.config/civspeak/answer-service-key"
-
-# The limits (see answer_service.py): 100 questions a day per computer, 300 per internet address, and
-# a hard $18 a month for everyone, under the key's own $20 limit in the Claude Console.
-LIMITS="CIVSPEAK_DAILY_QUESTIONS=100,CIVSPEAK_IP_DAILY_QUESTIONS=300,CIVSPEAK_MONTHLY_CAP_USD=18"
 
 g() { gcloud --project "$PROJECT" --quiet "$@"; }
 
@@ -59,9 +59,15 @@ deploy() {
   tag="$IMAGE:$(git rev-parse --short=12 HEAD)$(git diff --quiet HEAD -- src service pyproject.toml || echo -dirty)"
   g builds submit --region="$REGION" --config=service/cloudbuild.yaml --substitutions="_IMAGE=$tag" .
   g run deploy "$SERVICE" --region="$REGION" --image="$tag" --service-account="$ACCOUNT" \
-    --allow-unauthenticated --set-secrets="CIVSPEAK_SERVICE_KEY=$SECRET:latest" --update-env-vars="$LIMITS" \
+    --allow-unauthenticated --set-secrets="CIVSPEAK_SERVICE_KEY=$SECRET:latest" \
     --cpu=1 --memory=512Mi --concurrency=40 --min-instances=0 --max-instances=3 --timeout=120
   g run services describe "$SERVICE" --region="$REGION" --format="value(status.url)"
+}
+
+limits() {
+  local daily="${1:?questions a day per install}" ip="${2:?questions a day per internet address}"
+  local cap="${3:?the monthly cap in dollars}"
+  g run services update "$SERVICE" --region="$REGION" --update-env-vars="CIVSPEAK_DAILY_QUESTIONS=$daily,CIVSPEAK_IP_DAILY_QUESTIONS=$ip,CIVSPEAK_MONTHLY_CAP_USD=$cap"
 }
 
 raise() {
@@ -79,6 +85,7 @@ case "${1:-deploy}" in
   setup) setup ;;
   key) key ;;
   deploy) deploy ;;
+  limits) shift; limits "$@" ;;
   raise) shift; raise "$@" ;;
-  *) echo "usage: service/deploy.sh [setup|key|deploy|raise ID LIMIT]" >&2; exit 2 ;;
+  *) echo "usage: service/deploy.sh [setup|key|deploy|limits DAILY IP_DAILY CAP_USD|raise ID LIMIT]" >&2; exit 2 ;;
 esac

@@ -57,8 +57,11 @@ class FakeClaude:
 @pytest.fixture
 def service(monkeypatch):
     monkeypatch.setenv("CIVSPEAK_SERVICE_KEY", "service-key-not-real")
-    for name in ("CIVSPEAK_DAILY_QUESTIONS", "CIVSPEAK_IP_DAILY_QUESTIONS", "CIVSPEAK_MONTHLY_CAP_USD", "CIVSPEAK_RAISED"):
-        monkeypatch.delenv(name, raising=False)
+    # Invented limits: the real ones live only in the service's settings.
+    monkeypatch.setenv("CIVSPEAK_DAILY_QUESTIONS", "7")
+    monkeypatch.setenv("CIVSPEAK_IP_DAILY_QUESTIONS", "9")
+    monkeypatch.setenv("CIVSPEAK_MONTHLY_CAP_USD", "5")
+    monkeypatch.delenv("CIVSPEAK_RAISED", raising=False)
     store = MemoryStore()
     svc = Service(store=store)
     claude = FakeClaude()
@@ -102,7 +105,7 @@ def test_daily_limit_per_install(service, monkeypatch):
     assert post(service.client, request()).status_code == 200
     assert post(service.client, request()).status_code == 200
     r = post(service.client, request())
-    assert r.status_code == 429 and r.json() == {"limit": "daily", "allowed": 2}
+    assert r.status_code == 429 and r.json() == {"limit": "daily"}  # no numbers in the reply
     assert len(service.claude.calls) == 2  # the refused question never reached Claude
     assert post(service.client, request(install=OTHER)).status_code == 200  # another computer is unaffected
 
@@ -110,10 +113,10 @@ def test_daily_limit_per_install(service, monkeypatch):
 def test_raised_limit_for_one_install_skips_the_address_limit(service, monkeypatch):
     monkeypatch.setenv("CIVSPEAK_DAILY_QUESTIONS", "1")
     monkeypatch.setenv("CIVSPEAK_IP_DAILY_QUESTIONS", "1")
-    monkeypatch.setenv("CIVSPEAK_RAISED", f"{ME.lower()}=3, not-an-id=9")
+    monkeypatch.setenv("CIVSPEAK_RAISED", f"{ME.lower()}=3, not-an-id=4")
     for _ in range(3):
         assert post(service.client, request()).status_code == 200
-    assert post(service.client, request()).json() == {"limit": "daily", "allowed": 3}
+    assert post(service.client, request()).json() == {"limit": "daily"}
 
 
 def test_address_limit_stops_made_up_ids(service, monkeypatch):
@@ -122,6 +125,13 @@ def test_address_limit_stops_made_up_ids(service, monkeypatch):
     codes = [post(service.client, request(install=i), **{"X-Forwarded-For": "203.0.113.7, 10.0.0.1"}).status_code for i in ids]
     assert codes == [200, 200, 429]
     assert post(service.client, request(install=ids[2]), **{"X-Forwarded-For": "198.51.100.2"}).status_code == 200
+
+
+@pytest.mark.parametrize("missing", ["CIVSPEAK_DAILY_QUESTIONS", "CIVSPEAK_IP_DAILY_QUESTIONS", "CIVSPEAK_MONTHLY_CAP_USD"])
+def test_without_its_limits_the_service_answers_nothing(service, monkeypatch, missing):
+    monkeypatch.delenv(missing)
+    r = post(service.client, request())
+    assert r.status_code == 503 and service.claude.calls == []
 
 
 def test_monthly_cap_reserves_the_worst_case_first(service, monkeypatch):
@@ -166,7 +176,7 @@ def test_big_or_unsized_bodies_are_refused(service):
 
 
 def test_parse_raised():
-    assert parse_raised(f"{ME}=500 {OTHER}=1000") == {ME: 500, OTHER: 1000}
+    assert parse_raised(f"{ME}=4 {OTHER}=6") == {ME: 4, OTHER: 6}
     assert parse_raised("") == {}
     assert parse_raised(f"{ME}=lots") == {}
 
@@ -238,8 +248,8 @@ def test_client_streams_an_answer(fake_service):
 @pytest.mark.parametrize(
     "reply, raised",
     [
-        ((429, b'{"limit": "daily", "allowed": 100}'), "daily"),
-        ((429, b'{"limit": "monthly", "allowed": 100}'), "monthly"),
+        ((429, b'{"limit": "daily"}'), "daily"),
+        ((429, b'{"limit": "monthly"}'), "monthly"),
         ((502, b'{"error": "upstream"}'), "having trouble"),
         ((200, ndjson({"delta": "Half"})), "stopped part way"),
         ((200, ndjson({"error": "Could not get an answer."})), "Could not get an answer."),
@@ -251,7 +261,6 @@ def test_client_refusals(fake_service, reply, raised):
         with pytest.raises(online.LimitReached) as e:
             list(online.AnswerService().stream("q", []))
         assert e.value.kind == raised and e.value.install_id == online.install_id()
-        assert e.value.allowed == 100
     else:
         with pytest.raises(AnswerError, match=raised):
             list(online.AnswerService().stream("q", []))
@@ -278,7 +287,7 @@ def test_own_key_answers_directly_without_the_service(tmp_path):
 
 
 def test_limit_reaches_the_page_and_is_kept_for_a_page_opened_later(built_index, fake_service):
-    fake_service.reply = (429, b'{"limit": "daily", "allowed": 100}')
+    fake_service.reply = (429, b'{"limit": "daily"}')
     out, _ = built_index
     state = server.State(out.parent, Answerer(spend.Ledger(out.parent / "spend.jsonl"), out.parent / "no-key"))
     state.check = lambda: None
@@ -286,8 +295,8 @@ def test_limit_reaches_the_page_and_is_kept_for_a_page_opened_later(built_index,
     server.Answering(state, lambda name, data: events.append((name, data))).run("campus", None, spoken=False)
     kind, data = events[-1]
     assert kind == "problem" and data["kind"] == "limit" and data["limit"] == "daily"
-    assert data["install_id"] == online.install_id() and data["email"] == server.LIMIT_EMAIL and data["allowed"] == 100
-    assert "free limit of 100 questions" in data["message"]
+    assert data["install_id"] == online.install_id() and data["email"] == server.LIMIT_EMAIL and "allowed" not in data
+    assert "today's free limit of questions" in data["message"]
     assert state.status()["limit"]["install_id"] == online.install_id()
     assert state.status()["own_key"] is False
     assert state.settings_view()["install_id"] == online.install_id()
