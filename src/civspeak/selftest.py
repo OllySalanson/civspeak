@@ -9,7 +9,9 @@ app has no console). The exit code is the number of failed checks; the caller (c
 process at once, so a stuck check's thread cannot keep it running.
 
 With the voice and speech model files in place (--models FOLDER, or the app's own models folder),
-George also says a sentence and Whisper writes it back down.
+George also says a sentence and Whisper writes it back down. With CIVSPEAK_SELFTEST_ONLINE=1 (the
+release build, on a fresh Windows machine with no key anywhere), it also asks the live answer service
+a question, as a player's first question would.
 """
 
 from __future__ import annotations
@@ -48,6 +50,32 @@ def _claude() -> str:
 
     anthropic.Anthropic(api_key="sk-ant-selftest-not-a-key", base_url="https://api.anthropic.com", max_retries=0)
     return f"anthropic {anthropic.__version__}"
+
+
+def _answers() -> str:
+    """With no key of its own, this Civspeak gets an answer from the answer service (a real question)."""
+    from . import online
+    from .answer import Answerer
+    from .search import Hit
+
+    a = Answerer()
+    if a.own_key():
+        raise RuntimeError(f"a key of its own is set up ({a.keys.where}), so the answer service is not used")
+    page = {
+        "title": "Campus",
+        "section": "Districts",
+        "group": "",
+        "facts": [{"heading": "Placement", "lines": ["Must be built on flat land."]}],
+        "chapters": [],
+    }
+    started = time.monotonic()
+    done = None
+    for kind, value in a.stream("Where can I build a Campus?", [Hit(page, 1.0)]):
+        if kind == "done":
+            done = value
+    if done is None or not done.text:
+        raise RuntimeError("the answer service gave no answer")
+    return f"{online.install_id()} was answered in {time.monotonic() - started:.1f}s: {done.text!r}"
 
 
 def _voice() -> str:
@@ -141,6 +169,8 @@ def run(report: Path | None = None, models_folder: Path | None = None, deadline:
 
     if models_folder is not None or not models.missing(folder):
         checks.append(("speak and hear", _speak_and_hear(folder)))
+    if os.environ.get("CIVSPEAK_SELFTEST_ONLINE") == "1":
+        checks.append(("answers", _answers))
     out = open(report, "w", encoding="utf-8", buffering=1) if report is not None else None  # noqa: SIM115
 
     def say(line: str) -> None:

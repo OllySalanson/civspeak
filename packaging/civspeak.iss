@@ -62,8 +62,8 @@ Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreve
 Type: filesandordirs; Name: "{app}\_internal"
 
 [Icons]
-Name: "{autoprograms}\Civspeak"; Filename: "{app}\Civspeak.exe"; Comment: "Ask the Civ VI Civilopedia out loud"
-Name: "{autodesktop}\Civspeak"; Filename: "{app}\Civspeak.exe"; Comment: "Ask the Civ VI Civilopedia out loud"; Tasks: desktopicon
+Name: "{autoprograms}\Civspeak"; Filename: "{app}\Civspeak.exe"; Comment: "A voice Civilopedia for Civ VI"
+Name: "{autodesktop}\Civspeak"; Filename: "{app}\Civspeak.exe"; Comment: "A voice Civilopedia for Civ VI"; Tasks: desktopicon
 
 [Registry]
 ; The same per-user Run value the app's own "Start when I log in" sets (winhelper.set_start_at_login).
@@ -134,7 +134,7 @@ end;
 function InitializeUninstall(): Boolean;
 begin
   RemoveAll := (not UninstallSilent) and (MsgBox(
-    'Also remove your Civspeak settings, your Claude key, the Civilopedia it built and George''s downloaded voice?'
+    'Also remove your Civspeak settings, the Civilopedia it built and George''s downloaded voice?'
     + #13#10#13#10 + 'Choose No to keep them for when you install Civspeak again.',
     mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES);
   Result := True;

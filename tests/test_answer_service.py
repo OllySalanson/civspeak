@@ -301,3 +301,11 @@ def test_waking_the_service_pings_it_at_most_every_few_minutes(fake_service, mon
     svc.warm_up()
     svc.warm_up()
     assert pinged == [1]
+
+
+def test_selftest_asks_the_answer_service(fake_service):
+    from civspeak import selftest
+
+    fake_service.reply = (200, ndjson({"delta": "On flat land."}, {"done": {"text": "On flat land.", "used": [1]}}))
+    assert "On flat land." in selftest._answers()
+    assert fake_service.seen[0]["question"] == "Where can I build a Campus?"
