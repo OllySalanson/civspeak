@@ -328,8 +328,28 @@ kbd {
 
 .settings-foot { display: flex; justify-content: flex-end; padding: 16px 24px 20px; border-top: 1px solid var(--line); }
 
+/* Advanced: the player's own key and what goes with it, and their Civspeak ID. Folded away. */
+.advanced { border-top: 1px solid var(--line); }
+.advanced > summary {
+  padding: 14px 24px; cursor: pointer; color: var(--muted); font-size: 16px; list-style-position: inside;
+}
+.advanced > summary:hover { color: var(--text); }
+.advanced[open] > summary { color: var(--gold); }
+.advanced > summary + .setting { border-top: 0; padding-top: 4px; }
+
+.install-id {
+  font: 600 18px/1.4 Consolas, "Cascadia Mono", ui-monospace, monospace; letter-spacing: 0.04em;
+  padding: 7px 12px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  user-select: all;
+}
+
+/* The limit pop-up: the same panel as Settings, narrower. */
+.limit { width: min(560px, calc(100vw - 32px)); }
+.limit .settings-head + .setting { padding-top: 12px; }
+.limit .setting a { overflow-wrap: anywhere; }
+
 @media (max-width: 700px) {
-  .settings-head, .setting, .settings-foot { padding-left: 16px; padding-right: 16px; }
+  .settings-head, .setting, .settings-foot, .advanced > summary { padding-left: 16px; padding-right: 16px; }
   .settings .lead { margin-left: 16px; margin-right: 16px; }
 }
 .settings [hidden] { display: none !important; }

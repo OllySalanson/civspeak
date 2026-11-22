@@ -1,0 +1,5 @@
+# The answer service's own packages (service/Dockerfile). Civspeak itself goes in on top with --no-deps.
+anthropic==1.13.0
+starlette==1.10.0
+uvicorn==0.54.0
+google-cloud-firestore==2.34.1

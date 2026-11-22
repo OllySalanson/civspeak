@@ -1,0 +1,5 @@
+# Builds the answer service's image with service/Dockerfile (service/deploy.sh passes _IMAGE).
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "service/Dockerfile", "-t", "$_IMAGE", "."]
+images: ["$_IMAGE"]
