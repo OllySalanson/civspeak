@@ -104,6 +104,30 @@ def cmd_helper(args) -> int:
     return 0
 
 
+def cmd_models(args) -> int:
+    from . import models
+
+    folder = paths.models_dir()
+    if args.action == "fetch":
+
+        def report(s: dict) -> None:
+            print(f"\r{s['file'] or 'done'}: {s['done'] / 1e6:.0f} of {s['total'] / 1e6:.0f} MB ", end="", file=sys.stderr)
+
+        system.lower_priority()
+        try:
+            models.fetch(folder, report)
+        except models.DownloadError as e:
+            print(file=sys.stderr)
+            print(f"Could not download the models: {e}", file=sys.stderr)
+            return 1
+        print(file=sys.stderr)
+    todo = models.missing(folder)
+    for asset in models.ASSETS:
+        print(f"{'missing' if asset in todo else 'ok':8} {asset.path}  ({asset.part_of}, {models.mb(asset.size)})")
+    print(f"Models folder: {folder}" + ("" if paths.downloads_models() else " (this Civspeak uses the shared models instead)"))
+    return 1 if todo else 0
+
+
 def cmd_status(args) -> int:
     from . import index, latency, spend
 
@@ -159,6 +183,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("action", choices=["install", "uninstall", "status"])
     p.add_argument("--port", type=int, default=8765, help="the port the helper starts the page on (default 8765)")
     p.set_defaults(func=cmd_helper)
+
+    p = sub.add_parser("models", help="the Windows app's downloaded voice and speech models (status, fetch)")
+    p.add_argument("action", nargs="?", choices=["status", "fetch"], default="status")
+    p.set_defaults(func=cmd_models)
 
     p = sub.add_parser("status", help="show where things are, index age and this month's spend")
     p.set_defaults(func=cmd_status)

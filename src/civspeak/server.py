@@ -18,6 +18,8 @@ POST /api/wake           {} -> starts loading the voice and speech recognizer if
 POST /api/mic            {"key": "down"|"up"|"cancel"} the page's microphone button, in the Windows app
 POST /api/hush           {} -> George stops talking, in the Windows app
 POST /api/voice          {"on": true|false} the page's Voice on/off, for questions asked in the Windows app
+POST /api/models         {} -> fetch George's voice and the speech recognizer (again), in the Windows app;
+                           its progress is /api/status's "models"
 """
 
 from __future__ import annotations
@@ -42,7 +44,7 @@ from importlib import resources
 from pathlib import Path
 
 from . import index as index_mod
-from . import paths, spend, system
+from . import models, paths, spend, system
 from .answer import Answerer, AnswerError, KeyMissing
 from .hearing import BadAudio, Ears, Heard
 from .idle import IdleUnloader
@@ -88,6 +90,7 @@ class State:
         voice: Voice | None = None,
         ears: Ears | None = None,
         latency: LatencyLog | None = None,
+        download: models.Download | None = None,
     ):
         self.index_dir = index_dir
         self.answerer = answerer
@@ -96,6 +99,11 @@ class State:
         self.ears = ears or Ears()
         self.latency = latency or LatencyLog(paths.latency_file())
         self.unloader = IdleUnloader([self.voice, self.ears], paths.idle_unload_seconds())
+        # The Windows app fetches George's voice and the speech recognizer on its first run.
+        self.download = download if download is not None else models.Download() if paths.downloads_models() else None
+        if self.download is not None:
+            self.voice.download = self.ears.download = self.download
+            self.download.on_ready.append(self.wake)  # load them as soon as they are in place
         self.last_listen: dict = {}
         self._waking = threading.Lock()
         self.lock = threading.Lock()
@@ -192,11 +200,14 @@ class State:
             "cap": ledger.cap,
             "voice": {"problem": self.voice.problem(), "ready": self.voice.loaded},
             "mic": {"problem": self.ears.problem(), "ready": self.ears.loaded},
+            "models": self.download.status() if self.download is not None else None,
         }
 
     def warm_up(self) -> None:
         """Get everything a question needs ready in the background, so the first question is not slow:
         George and Whisper loaded and run once, and Claude's client library imported (about a second)."""
+        if self.download is not None:
+            self.download.start()  # whatever is missing; nothing if every file is in place
         self.wake()
         threading.Thread(target=self.answerer.warm_up, name="warm-claude", daemon=True).start()
         self.unloader.start()
@@ -368,7 +379,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/listen":
             self._listen(speak="speak=1" in self.path)
             return
-        if path not in ("/api/ask", "/api/hotkey", "/api/wake", "/api/mic", "/api/hush", "/api/voice"):
+        if path not in ("/api/ask", "/api/hotkey", "/api/wake", "/api/mic", "/api/hush", "/api/voice", "/api/models"):
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         # Only accept requests from our own page and helper (blocks other websites posting to localhost).
@@ -381,6 +392,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/wake":
             self.state.wake()
             self._json(HTTPStatus.OK, {"ok": True})
+            return
+        if path == "/api/models":
+            download = self.state.download
+            if download is None:
+                self._json(HTTPStatus.NOT_FOUND, {"error": "this Civspeak uses the models already on the PC"})
+                return
+            download.start()  # again after a failure; nothing if it is running or done
+            self._json(HTTPStatus.OK, download.status())
             return
         if path in ("/api/mic", "/api/hush", "/api/voice"):
             self._native(path)

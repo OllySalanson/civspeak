@@ -97,25 +97,47 @@ def idle_unload_seconds() -> float:
         return 20 * 60
 
 
+# The Windows app fetches the int8 Kokoro (models.py): measured against the full model on George
+# (22 Nov 2026, 4 threads): 92 MB instead of 325 MB, 347 MB of memory instead of 578 MB, the same
+# speed (real-time factor 0.41 against 0.43), and Whisper heard the same words from both.
+APP_KOKORO_MODEL = "kokoro-v1.0.int8.onnx"
+KOKORO_MODEL = "kokoro-v1.0.onnx"  # the full model, shared with the pixel-explainer narrator in WSL
+KOKORO_VOICES = "voices-v1.0.bin"
+WHISPER_FOLDER = "whisper-base.en"
+
+
+def models_dir() -> Path:
+    """Where the Windows app keeps the model files it downloads (CIVSPEAK_MODELS_DIR, else data_dir()/models)."""
+    if os.environ.get("CIVSPEAK_MODELS_DIR"):
+        return Path(os.environ["CIVSPEAK_MODELS_DIR"])
+    return data_dir() / "models"
+
+
+def downloads_models() -> bool:
+    """Whether this Civspeak fetches its own models (the Windows app) rather than sharing ones already
+    on the PC (WSL). CIVSPEAK_MODELS_DIR turns the downloaded models on anywhere."""
+    return app_dir() is not None or bool(os.environ.get("CIVSPEAK_MODELS_DIR"))
+
+
 def kokoro_files() -> tuple[Path, Path]:
     """The Kokoro model and voice pack: in the app's models folder on Windows, shared with the
     pixel-explainer narrator elsewhere."""
     if os.environ.get("CIVSPEAK_KOKORO_DIR"):
         base = Path(os.environ["CIVSPEAK_KOKORO_DIR"])
-    elif app_dir() is not None:
-        base = data_dir() / "models"
+    elif downloads_models():
+        return models_dir() / APP_KOKORO_MODEL, models_dir() / KOKORO_VOICES
     else:
         base = Path(os.path.expanduser("~/.local/share/pixel-explainer"))
-    return base / "kokoro-v1.0.onnx", base / "voices-v1.0.bin"
+    return base / KOKORO_MODEL, base / KOKORO_VOICES
 
 
 def whisper_model() -> str:
     """A faster-whisper model: a folder holding it (in the app's models folder on Windows) or a model
-    name read from the Hugging Face cache. Never downloaded at run time."""
+    name read from the Hugging Face cache. Never downloaded by faster-whisper itself."""
     if os.environ.get("CIVSPEAK_WHISPER_MODEL"):
         return os.environ["CIVSPEAK_WHISPER_MODEL"]
-    if app_dir() is not None:
-        return str(data_dir() / "models" / "whisper-base.en")
+    if downloads_models():
+        return str(models_dir() / WHISPER_FOLDER)
     return "base.en"
 
 
