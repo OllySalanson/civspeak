@@ -1,0 +1,55 @@
+Civspeak - third-party software and models
+==========================================
+
+Civspeak is an unofficial fan tool. It is not made, endorsed or supported by Firaxis Games or 2K.
+It ships no game text, art or files: it reads the Civilopedia from the copy of Civilization VI
+installed on your own PC, and your questions and the matching Civilopedia entries go to Anthropic's
+Claude under your own API key.
+
+Civspeak's own source code: https://github.com/OllySalanson/civspeak
+
+The installed program contains the software below, each under its own licence. The full licence
+texts are at the addresses given, and the exact source of each version used is on PyPI
+(https://pypi.org/project/<name>/<version>/) or at the project's own address.
+
+Covered by the GNU General Public License, version 3 or later
+-------------------------------------------------------------
+- espeak-ng (pronunciation for George's voice), as a library inside espeakng-loader.
+  Source: https://github.com/espeak-ng/espeak-ng  Licence: https://github.com/espeak-ng/espeak-ng/blob/master/COPYING
+- phonemizer. Source: https://github.com/bootphon/phonemizer  Licence: GPL-3.0-or-later
+Because these are included, the installed program as a whole is offered under the terms of the
+GPL version 3 or later; you may ask for, or download, the complete corresponding source from the
+addresses above and Civspeak's own repository.
+
+Other software
+--------------
+- Python (PSF License) https://www.python.org
+- PyInstaller bootloader (GPL-2.0 with an exception that allows any program to use it) https://pyinstaller.org
+- anthropic (MIT) https://github.com/anthropics/anthropic-sdk-python
+- kokoro-onnx (MIT) https://github.com/thewh1teagle/kokoro-onnx
+- espeakng-loader (MIT, the wrapper) https://github.com/thewh1teagle/espeakng-loader
+- onnxruntime (MIT) https://github.com/microsoft/onnxruntime
+- faster-whisper (MIT) https://github.com/SYSTRAN/faster-whisper
+- CTranslate2 (MIT) https://github.com/OpenNMT/CTranslate2
+- tokenizers (Apache-2.0) https://github.com/huggingface/tokenizers
+- huggingface_hub (Apache-2.0) https://github.com/huggingface/huggingface_hub
+- NumPy (BSD-3-Clause, with bundled OpenBLAS: BSD-3-Clause) https://numpy.org
+- pywebview (BSD-3-Clause) https://github.com/r0x0r/pywebview
+- pythonnet and clr_loader (MIT) https://github.com/pythonnet/pythonnet
+- Microsoft Edge WebView2 SDK loader (BSD-3-Clause, shipped with pywebview) https://www.nuget.org/packages/Microsoft.Web.WebView2
+- sounddevice (MIT) and PortAudio (MIT) https://github.com/spatialaudio/python-sounddevice
+- pydantic and pydantic-core (MIT), httpx2 and httpcore2 (BSD-3-Clause), anyio (MIT), jiter (MIT),
+  idna (BSD-3-Clause), h11 (MIT), sniffio (MIT or Apache-2.0), protobuf (BSD-3-Clause),
+  flatbuffers (Apache-2.0), tqdm (MIT and MPL-2.0), PyYAML (MIT), filelock (Unlicense),
+  fsspec (BSD-3-Clause), packaging (Apache-2.0 or BSD-2-Clause), attrs (MIT), joblib (BSD-3-Clause),
+  dlinfo (MPL-2.0), docstring_parser (MIT), typing_extensions (PSF), truststore (MIT), click (BSD-3-Clause),
+  colorama (BSD-3-Clause), bottle (MIT), proxy_tools (BSD), cloudpickle (BSD-3-Clause),
+  silero-vad model inside faster-whisper (MIT) https://github.com/snakers4/silero-vad
+
+Models downloaded on first run
+------------------------------
+- Kokoro-82M voice model and voices (Apache-2.0), https://huggingface.co/hexgrad/Kokoro-82M,
+  as converted to ONNX by kokoro-onnx: https://github.com/thewh1teagle/kokoro-onnx/releases
+- Whisper base.en (MIT, OpenAI), as converted to CTranslate2 by Systran:
+  https://huggingface.co/Systran/faster-whisper-base.en
+They are fetched from Civspeak's own GitHub Release and kept in %LOCALAPPDATA%\Civspeak\models.

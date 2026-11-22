@@ -13,6 +13,7 @@ import difflib
 import json
 import re
 import sqlite3
+import threading
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -84,8 +85,12 @@ class _Name:
 class Index:
     def __init__(self, path: Path):
         self.path = path
+        # One connection, used by the server's request threads and the speech recognizer's warm-up:
+        # each query runs and is read to the end under this lock, so two threads never share one
+        # half-read statement (that returned other queries' rows).
         self.db = sqlite3.connect(sqlite_uri(path), uri=True, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
+        self._lock = threading.Lock()
         self.meta = dict((r["key"], r["value"]) for r in self.db.execute("SELECT key, value FROM meta"))
         self.sections = dict(self.db.execute("SELECT id, section_id FROM pages").fetchall())
         self.layouts = dict(self.db.execute("SELECT id, layout FROM pages").fetchall())
@@ -113,8 +118,13 @@ class Index:
         self.placeable = {r[0] for r in self.db.execute("""SELECT id FROM pages WHERE facts LIKE '%"heading": "Placement"%'""")}
         self.sound_keys = sorted(k for k in self.by_sound if len(k) >= 3 and " " not in k)
 
+    def _rows(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
+        with self._lock:
+            return self.db.execute(sql, params).fetchall()
+
     def close(self) -> None:
-        self.db.close()
+        with self._lock:
+            self.db.close()
 
     @property
     def page_count(self) -> int:
@@ -123,7 +133,7 @@ class Index:
     # -- pages -----------------------------------------------------------------------------
 
     def page(self, page_id: int) -> dict:
-        r = self.db.execute("SELECT * FROM pages WHERE id = ?", (page_id,)).fetchone()
+        r = self._rows("SELECT * FROM pages WHERE id = ?", (page_id,))[0]
         return {
             "id": r["id"],
             "uid": r["uid"],
@@ -138,11 +148,11 @@ class Index:
         }
 
     def titles(self) -> list[str]:
-        return [r[0] for r in self.db.execute("SELECT title FROM pages ORDER BY title")]
+        return [r[0] for r in self._rows("SELECT title FROM pages ORDER BY title")]
 
     def name_list(self) -> list[tuple[str, str, str, bool]]:
         """(section id, group, title, unique to a civilization) of every page, in Civilopedia order."""
-        rows = self.db.execute("SELECT section_id, grp, title, facts FROM pages ORDER BY id")
+        rows = self._rows("SELECT section_id, grp, title, facts FROM pages ORDER BY id")
         return [(r[0], r[1] or "", r[2], any(g["heading"] == "Unique To" for g in json.loads(r[3]))) for r in rows]
 
     # -- search ----------------------------------------------------------------------------
@@ -264,11 +274,11 @@ class Index:
             return []
         query = " OR ".join(f'"{w}"' for w in words)
         try:
-            rows = self.db.execute(
+            rows = self._rows(
                 "SELECT rowid, bm25(pages_fts, 10.0, 6.0, 1.0) AS rank FROM pages_fts "
                 "WHERE pages_fts MATCH ? ORDER BY rank LIMIT 40",
                 (query,),
-            ).fetchall()
+            )
         except sqlite3.Error:
             return []
         return [(r["rowid"], r["rank"]) for r in rows]

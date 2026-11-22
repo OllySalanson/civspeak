@@ -103,3 +103,38 @@ def test_soundalike_keys():
     assert phrase_key("zigurat") == phrase_key("Ziggurat")
     assert phrase_key("harbour") == phrase_key("harbor")
     assert phrase_key("Mbanza") != phrase_key("Hansa")
+
+
+def test_threads_sharing_the_index_never_see_each_others_rows(built_index):
+    """The server's request threads and the speech recognizer's warm-up read one connection at once."""
+    import threading
+
+    from civspeak.search import Index
+
+    out, _ = built_index
+    index = Index(out)
+    expected_names, expected_hits = index.name_list(), [h.page["title"] for h in index.search("where can I build a thinkery")]
+    problems = []
+
+    def hammer(work, expected):
+        try:
+            for _ in range(200):
+                got = work()
+                if got != expected:
+                    problems.append(got)
+        except Exception as e:  # noqa: BLE001 - any error is the failure being tested
+            problems.append(repr(e))
+
+    threads = [
+        threading.Thread(target=hammer, args=(index.name_list, expected_names)),
+        threading.Thread(
+            target=hammer, args=(lambda: [h.page["title"] for h in index.search("where can I build a thinkery")], expected_hits)
+        ),
+        threading.Thread(target=hammer, args=(index.name_list, expected_names)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    index.close()
+    assert problems == []
