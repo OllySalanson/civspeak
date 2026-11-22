@@ -55,6 +55,7 @@ Name: "startatlogin"; Description: "Start Civspeak when I log in to Windows"
 [Files]
 Source: "..\dist\Civspeak\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [InstallDelete]
 ; An upgrade replaces the whole program folder, so no file from an older version is left behind.

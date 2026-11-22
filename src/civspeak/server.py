@@ -95,9 +95,9 @@ SPEECH_URL = re.compile(r"^/api/speech/([A-Za-z0-9_-]{6,32})/(\d{1,3})$")
 # What George says when there is no answer to read out.
 SPOKEN_PROBLEMS = {
     "no_index": "The Civilopedia is still being built from your game. Try again in a moment.",
-    "no_key": "There's no Claude key set up yet, so I can't answer. The entries are on screen.",
+    "no_key": "Answers aren't set up yet, so I can't answer. The entries are on screen.",
     "cap": "The monthly limit is reached, so I can't answer until next month. The entries are on screen.",
-    "api": "Claude isn't answering right now. The entries are on screen.",
+    "api": "I can't get an answer right now. The entries are on screen.",
 }
 NOT_HEARD = "Sorry, I didn't catch that."
 
@@ -759,8 +759,8 @@ class Answering:
         except KeyMissing:
             self._problem(
                 "no_key",
-                "No Claude API key is set up yet, so there is no spoken answer. "
-                "Add one in Settings; the matching Civilopedia entries are below.",
+                "Answers are not set up yet, so there is no spoken answer. "
+                "Open Settings to set them up; the matching Civilopedia entries are below.",
                 speaker,
             )
             return "no_key"

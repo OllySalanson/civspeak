@@ -1,12 +1,14 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "civspeak"
 version = "0.1.0"
-description = "Ask the Civ VI Civilopedia out loud"
+description = "A voice Civilopedia for Civilization VI"
 readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = ["anthropic>=1.13"]
 

@@ -268,14 +268,14 @@ def _cost(message, asked: str = MODEL) -> tuple[float, dict]:
 def _friendly_error(e, status, where: str) -> str:
     if status == 401:
         if where == keys.CredentialKeys.where:
-            return "Claude did not accept the API key. Add it again in Civspeak's Settings."
-        return f"The API key was rejected. Check the key in {where}."
+            return "The answer key was not accepted. Add it again in Civspeak's Settings."
+        return f"The answer key was rejected. Check the key in {where}."
     if status == 403:
-        return "The API key is not allowed to use this model."
+        return "The answer key is not allowed to use this model."
     if status == 429:
-        return "Claude is rate limiting requests right now. Try again in a moment."
+        return "Too many questions at once right now. Try again in a moment."
     if status and status >= 500:
-        return "Claude is having trouble right now. Try again in a moment."
+        return "Answers are having trouble right now. Try again in a moment."
     if status:
-        return f"Claude returned an error ({status})."
-    return "Could not reach Claude. Check the internet connection."
+        return f"Could not get an answer (error {status})."
+    return "Could not get an answer. Check the internet connection."

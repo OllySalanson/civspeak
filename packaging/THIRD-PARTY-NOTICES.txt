@@ -3,8 +3,8 @@ Civspeak - third-party software and models
 
 Civspeak is an unofficial fan tool. It is not made, endorsed or supported by Firaxis Games or 2K.
 It ships no game text, art or files: it reads the Civilopedia from the copy of Civilization VI
-installed on your own PC, and your questions and the matching Civilopedia entries go to Anthropic's
-Claude under your own API key.
+installed on your own PC. Your questions and the matching Civilopedia entries are sent to an online
+service, which writes the short answer.
 
 Civspeak's own source code: https://github.com/OllySalanson/civspeak
 
