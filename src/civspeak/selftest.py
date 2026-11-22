@@ -2,9 +2,11 @@
 Claude key, a microphone or a screen. The release build runs it on the build machine before it makes
 the installer, so a missing DLL or data file fails the build instead of a player's first question.
 
-Each check is one line of the report: "ok <name>: <detail>" or "FAIL <name>: <why>". The report goes
-to standard output and, with --report FILE, to that file too (the packaged app has no console).
-The exit code is the number of failed checks.
+Each check is one line of the report: "ok <name>: <detail>" or "FAIL <name>: <why>", written as
+soon as it is known. A check gets CHECK_SECONDS; one that takes longer fails, with where it was
+stuck. The report goes to standard output and, with --report FILE, to that file too (the packaged
+app has no console). The exit code is the number of failed checks; the caller (cli) ends the
+process at once, so a stuck check's thread cannot keep it running.
 
 With the voice and speech model files in place (--models FOLDER, or the app's own models folder),
 George also says a sentence and Whisper writes it back down.
@@ -16,6 +18,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import traceback
 from collections.abc import Callable
@@ -24,6 +27,7 @@ from pathlib import Path
 
 from . import __version__, paths, system
 
+CHECK_SECONDS = 120  # a check that takes longer is reported as stuck, and the next one runs
 CHECK_SENTENCE = "A Campus gets plus one Science from each adjacent Mountain."
 
 
@@ -121,7 +125,7 @@ def _speak_and_hear(folder: Path) -> Callable[[], str]:
     return check
 
 
-def run(report: Path | None = None, models_folder: Path | None = None) -> int:
+def run(report: Path | None = None, models_folder: Path | None = None, deadline: float = CHECK_SECONDS) -> int:
     checks: list[tuple[str, Callable[[], str]]] = [
         ("page", _web),
         ("index", _sqlite),
@@ -137,19 +141,59 @@ def run(report: Path | None = None, models_folder: Path | None = None) -> int:
 
     if models_folder is not None or not models.missing(folder):
         checks.append(("speak and hear", _speak_and_hear(folder)))
-    lines = [f"Civspeak {__version__} self-test ({'packaged' if getattr(sys, 'frozen', False) else 'from source'})"]
+    out = open(report, "w", encoding="utf-8", buffering=1) if report is not None else None  # noqa: SIM115
+
+    def say(line: str) -> None:
+        # Each line is written as soon as it is known, so a check that never returns still leaves
+        # the report saying which one it was.
+        for stream in (out, sys.stdout):
+            if stream is not None:
+                stream.write(line + "\n")
+                stream.flush()
+
+    if system.IS_WINDOWS:
+        # A library that fails to load must fail the check, not open a Windows error box nobody will
+        # click (SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX).
+        import ctypes
+
+        ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x8000)
+    say(f"Civspeak {__version__} self-test ({'packaged' if getattr(sys, 'frozen', False) else 'from source'})")
     failed = 0
-    for name, check in checks:
-        try:
-            lines.append(f"ok {name}: {check()}")
-        except Exception as e:  # every failure is reported, then the next check runs
-            failed += 1
-            lines.append(f"FAIL {name}: {type(e).__name__}: {e}")
-            lines += ["    " + line for line in traceback.format_exc().rstrip().splitlines()[-6:]]
-    lines.append("all checks passed" if not failed else f"{failed} check(s) failed")
-    text = "\n".join(lines) + "\n"
-    if report is not None:
-        report.write_text(text, encoding="utf-8")
-    if sys.stdout is not None:
-        sys.stdout.write(text)
+    try:
+        for name, check in checks:
+            say(f"... {name}")
+            ok, detail = _within(check, deadline)
+            if ok:
+                say(f"ok {name}: {detail}")
+            else:
+                failed += 1
+                say(f"FAIL {name}: {detail}")
+        say("all checks passed" if not failed else f"{failed} check(s) failed")
+    finally:
+        if out is not None:
+            out.close()
     return failed
+
+
+def _within(check: Callable[[], str], deadline: float) -> tuple[bool, str]:
+    """Run one check on its own thread: (True, what it found) or (False, why it failed or that it
+    took longer than `deadline` seconds, with where it was stuck)."""
+    result: list[tuple[bool, str]] = []
+
+    def work() -> None:
+        try:
+            result.append((True, check()))
+        except Exception as e:  # every failure is reported, then the next check runs
+            where = "\n".join("    " + line for line in traceback.format_exc().rstrip().splitlines()[-6:])
+            result.append((False, f"{type(e).__name__}: {e}\n{where}"))
+
+    thread = threading.Thread(target=work, name="selftest-check", daemon=True)
+    thread.start()
+    thread.join(deadline)
+    if result:
+        return result[0]
+    frame = sys._current_frames().get(thread.ident)
+    stack = "".join(traceback.format_stack(frame)[-8:]) if frame is not None else ""
+    return False, f"no answer after {deadline:.0f} seconds; it was stuck here:\n" + "\n".join(
+        "    " + line for line in stack.rstrip().splitlines()
+    )

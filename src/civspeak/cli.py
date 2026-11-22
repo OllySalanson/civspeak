@@ -138,7 +138,14 @@ def cmd_version(args) -> int:
 def cmd_selftest(args) -> int:
     from . import selftest
 
-    return min(selftest.run(Path(args.report) if args.report else None, Path(args.models) if args.models else None), 99)
+    failed = selftest.run(Path(args.report) if args.report else None, Path(args.models) if args.models else None)
+    if args.exit:
+        # End now: a check stuck in a library (its thread is abandoned) must not keep the process running.
+        for stream in (sys.stdout, sys.stderr):
+            if stream is not None:
+                stream.flush()
+        os._exit(min(failed, 99))
+    return min(failed, 99)
 
 
 def cmd_status(args) -> int:
@@ -209,6 +216,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("selftest", help="check this Civspeak has everything it needs (the release build runs it)")
     p.add_argument("--report", help="also write the report to this file")
     p.add_argument("--models", help="a folder with the voice and speech models: also have George speak and Whisper listen")
+    p.add_argument("--no-exit", dest="exit", action="store_false", help=argparse.SUPPRESS)  # for tests: return instead
     p.set_defaults(func=cmd_selftest)
 
     p = sub.add_parser("status", help="show where things are, index age and this month's spend")

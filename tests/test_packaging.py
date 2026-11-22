@@ -5,6 +5,7 @@ login). The build itself runs on Windows in .github/workflows/build.yml."""
 import importlib.util
 import re
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,7 @@ def test_the_self_test_passes_from_source_and_writes_its_report(tmp_path, capsys
     assert text == capsys.readouterr().out
     lines = text.splitlines()
     assert lines[0].startswith("Civspeak ") and lines[-1] == "all checks passed"
-    names = [line.split(":")[0] for line in lines[1:-1]]
+    names = [line.split(":")[0] for line in lines[1:-1] if not line.startswith("... ")]
     assert names == ["ok page", "ok index", "ok claude", "ok voice", "ok ears", "ok sound", "ok window", "ok child"]
 
 
@@ -38,6 +39,24 @@ def test_a_failing_check_is_reported_and_counted(tmp_path, monkeypatch):
     assert "FAIL voice: RuntimeError: espeak-ng is missing" in text and text.endswith("1 check(s) failed\n")
 
 
+def test_a_stuck_check_is_reported_with_where_it_stuck_and_the_rest_still_run(tmp_path, monkeypatch):
+    release = threading.Event()
+
+    def stuck():
+        release.wait(30)  # a library call that never returns
+        return "never"
+
+    monkeypatch.setattr(selftest, "_voice", stuck)
+    report = tmp_path / "r.txt"
+    try:
+        assert selftest.run(report, deadline=0.5) == 1
+    finally:
+        release.set()
+    text = report.read_text()
+    assert "FAIL voice: no answer after 0 seconds; it was stuck here:" in text and "release.wait(30)" in text
+    assert "ok ears:" in text and "ok child:" in text and text.endswith("1 check(s) failed\n")
+
+
 def test_speaking_and_hearing_is_checked_when_the_models_are_there(tmp_path, monkeypatch):
     seen = []
     monkeypatch.setattr(selftest, "_speak_and_hear", lambda folder: lambda: seen.append(folder) or "heard it")
@@ -45,7 +64,9 @@ def test_speaking_and_hearing_is_checked_when_the_models_are_there(tmp_path, mon
     assert seen == [tmp_path] and "ok speak and hear: heard it" in (tmp_path / "r.txt").read_text()
 
 
-@pytest.mark.parametrize(("argv", "command"), [(["--build"], "build"), (["--version"], "version"), (["--selftest"], "selftest")])
+@pytest.mark.parametrize(
+    ("argv", "command"), [(["--build"], "build"), (["--version"], "version"), (["--selftest", "--no-exit"], "selftest")]
+)
 def test_the_packaged_app_takes_its_own_commands(argv, command, monkeypatch):
     ran = []
     monkeypatch.setattr(cli, f"cmd_{command}", lambda args: ran.append(command) or 0)

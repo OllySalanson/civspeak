@@ -25,7 +25,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     defaults:
       run:
         shell: pwsh
@@ -58,6 +58,7 @@ jobs:
         run: pyinstaller --noconfirm --clean packaging/civspeak.spec
 
       - name: Self-test the built folder
+        timeout-minutes: 15
         run: |
           $p = Start-Process -FilePath dist\Civspeak\Civspeak.exe -ArgumentList "--selftest", "--report", "selftest-folder.txt" -Wait -PassThru
           Get-Content selftest-folder.txt
@@ -77,6 +78,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
 
       - name: Install it as a player would, self-test, uninstall
+        timeout-minutes: 15
         run: |
           $setup = Start-Process -FilePath dist\Civspeak-Setup.exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/TASKS=", "/LOG=install.log" -Wait -PassThru
           if ($setup.ExitCode -ne 0) { Get-Content install.log; throw "Setup failed ($($setup.ExitCode))" }
