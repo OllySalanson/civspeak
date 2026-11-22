@@ -1,0 +1,129 @@
+# Builds Civspeak-Setup.exe on Windows and proves it works before anyone downloads it:
+# - every pull request that touches the app: build, self-test, install, self-test again, uninstall;
+# - a version tag (v1.2.3, matching civspeak.__version__): the same, then a draft GitHub Release with
+#   the installer and its SHA-256, for a person to read over and publish.
+name: Build the Windows app
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "src/**"
+      - "packaging/**"
+      - "pyproject.toml"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the pinned build environment (PyAV left out on purpose)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --no-deps -r packaging/requirements-windows.txt
+          python -m pip install --no-deps .
+          if (python -c "import importlib.util; print(importlib.util.find_spec('av') is not None)" | Select-String True) {
+            throw "PyAV was installed; the build must use packaging/stubs/av"
+          }
+
+      - name: Read the version
+        id: version
+        run: |
+          $version = python -c "import civspeak; print(civspeak.__version__)"
+          if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne "v$version") {
+            throw "The tag ${{ github.ref_name }} does not match civspeak.__version__ $version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build Civspeak.exe (one folder)
+        run: pyinstaller --noconfirm --clean packaging/civspeak.spec
+
+      - name: Self-test the built folder
+        run: |
+          $p = Start-Process -FilePath dist\Civspeak\Civspeak.exe -ArgumentList "--selftest", "--report", "selftest-folder.txt" -Wait -PassThru
+          Get-Content selftest-folder.txt
+          if ($p.ExitCode -ne 0) { throw "The self-test failed ($($p.ExitCode) checks)" }
+
+      - name: Build Civspeak-Setup.exe
+        run: |
+          $iscc = Get-Command iscc -ErrorAction SilentlyContinue
+          if (-not $iscc) {
+            $iscc = Get-Item "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" -ErrorAction SilentlyContinue
+          }
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y
+            $iscc = Get-Item "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          }
+          & $iscc.Source "/DAppVersion=${{ steps.version.outputs.version }}" "/DIconFile=..\build\civspeak\civspeak.ico" packaging\civspeak.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+
+      - name: Install it as a player would, self-test, uninstall
+        run: |
+          $setup = Start-Process -FilePath dist\Civspeak-Setup.exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/TASKS=", "/LOG=install.log" -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { Get-Content install.log; throw "Setup failed ($($setup.ExitCode))" }
+          $exe = "$env:LOCALAPPDATA\Programs\Civspeak\Civspeak.exe"
+          $p = Start-Process -FilePath $exe -ArgumentList "--selftest", "--report", "selftest-installed.txt" -Wait -PassThru
+          Get-Content selftest-installed.txt
+          if ($p.ExitCode -ne 0) { throw "The installed self-test failed ($($p.ExitCode) checks)" }
+          $uninstall = Start-Process -FilePath "$env:LOCALAPPDATA\Programs\Civspeak\unins000.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "Uninstall failed ($($uninstall.ExitCode))" }
+          Start-Sleep -Seconds 3
+          if (Test-Path $exe) { throw "Uninstall left Civspeak.exe behind" }
+
+      - name: Checksums
+        run: |
+          $hash = (Get-FileHash dist\Civspeak-Setup.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  Civspeak-Setup.exe" | Out-File -Encoding ascii dist\SHA256SUMS.txt
+          Get-Content dist\SHA256SUMS.txt
+          "{0:N1} MB" -f ((Get-Item dist\Civspeak-Setup.exe).Length / 1MB)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Civspeak-Setup-${{ steps.version.outputs.version }}
+          path: |
+            dist/Civspeak-Setup.exe
+            dist/SHA256SUMS.txt
+            selftest-folder.txt
+            selftest-installed.txt
+          retention-days: 14
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifact
+          merge-multiple: true
+      - name: Draft the release (a person reads it over and publishes it)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+            --title "Civspeak ${TAG#v}" \
+            --notes "Download Civspeak-Setup.exe and run it. SHA256SUMS.txt holds its SHA-256." \
+            artifact/Civspeak-Setup.exe artifact/SHA256SUMS.txt

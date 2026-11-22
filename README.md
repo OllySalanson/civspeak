@@ -242,8 +242,19 @@ Documents from Windows itself.
 
 ```sh
 .venv/bin/python -m pytest -q          # tests use an invented mini game, never real game files
-.venv/bin/ruff check src tests tools && .venv/bin/ruff format --check src tests tools
+.venv/bin/ruff check src tests tools packaging && .venv/bin/ruff format --check src tests tools packaging
 ```
+
+### Building the Windows installer
+
+`.github/workflows/build.yml` builds `Civspeak-Setup.exe` on GitHub's Windows machines, never on
+this PC: on every pull request that touches the app, and on a version tag (`v1.2.3`, which must match
+`civspeak.__version__`), where it also drafts a GitHub Release for a person to publish. It installs
+the pinned packages in `packaging/requirements-windows.txt` (PyAV left out: `packaging/stubs/av`
+stands in for it), builds the one-folder `Civspeak.exe` with `packaging/civspeak.spec`, runs
+`Civspeak.exe --selftest` on it, makes the installer with `packaging/civspeak.iss` (Inno Setup,
+per user, no administrator prompt), installs it silently, runs the self-test again and uninstalls.
+`civspeak selftest` runs the same checks from source.
 
 `tools/voice_check.py` tests the whole spoken path without a person: Kokoro says each question in
 a different voice and it goes through the microphone's endpoints of a running server, with timings.

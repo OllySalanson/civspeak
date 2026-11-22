@@ -2,7 +2,7 @@
 
 This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
 
-- Setup, commands and how it works: `README.md`. Tests and lint: `.venv/bin/python -m pytest -q`, `.venv/bin/ruff check src tests tools`.
+- Setup, commands and how it works: `README.md`. Tests and lint: `.venv/bin/python -m pytest -q`, `.venv/bin/ruff check src tests tools packaging`. The Windows installer is built only by `.github/workflows/build.yml` on GitHub's Windows runners (README "Building the Windows installer"); never build it on this PC.
 - Never commit Firaxis or mod text, game files, the built index or the key. `tools/repo_guard.py` enforces this (pre-commit hook via `git config core.hooksPath .githooks`, and `tests/test_repo_guard.py`). Test fixtures are invented and live only in `tests/conftest.py`.
 - Game data comes from the captain's PC at run time: `DebugGameplay.sqlite` (rules of the last loaded game) plus the `Modding.log` text replay. Page stats are a port of the game's `CivilopediaPage_*.lua` (latest expansion's version wins) plus the Better Civilopedia mod's layouts (workshop item 1341630847); read those files before changing `src/civspeak/pedia.py`, and bump `SCHEMA_VERSION` in `index.py` when page output changes so existing indexes rebuild.
 - The API key comes only from `keys.store()`: `~/.config/civspeak/anthropic-key` in WSL, Windows Credential Manager under Windows' own Python (`system.credential_*`); never print or log it, and never return it to the page. Real API calls count against the $10/month ledger `spend.jsonl` in the data folder (`paths.data_dir()`); tests use a fake client.

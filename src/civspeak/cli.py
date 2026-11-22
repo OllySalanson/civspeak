@@ -128,6 +128,19 @@ def cmd_models(args) -> int:
     return 1 if todo else 0
 
 
+def cmd_version(args) -> int:
+    from . import __version__
+
+    print(__version__)
+    return 0
+
+
+def cmd_selftest(args) -> int:
+    from . import selftest
+
+    return min(selftest.run(Path(args.report) if args.report else None, Path(args.models) if args.models else None), 99)
+
+
 def cmd_status(args) -> int:
     from . import index, latency, spend
 
@@ -190,14 +203,22 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("action", nargs="?", choices=["status", "fetch"], default="status")
     p.set_defaults(func=cmd_models)
 
+    p = sub.add_parser("version", help="print Civspeak's version")
+    p.set_defaults(func=cmd_version)
+
+    p = sub.add_parser("selftest", help="check this Civspeak has everything it needs (the release build runs it)")
+    p.add_argument("--report", help="also write the report to this file")
+    p.add_argument("--models", help="a folder with the voice and speech models: also have George speak and Whisper listen")
+    p.set_defaults(func=cmd_selftest)
+
     p = sub.add_parser("status", help="show where things are, index age and this month's spend")
     p.set_defaults(func=cmd_status)
 
     argv = sys.argv[1:] if argv is None else argv
     if not argv and getattr(sys, "frozen", False):
         argv = ["app"]  # Civspeak.exe on its own (a shortcut, or the Run key at login) is the app
-    if argv[:1] == ["--build"]:
-        argv = ["build", *argv[1:]]  # how the packaged app (Civspeak.exe --build) rebuilds the index
+    if argv[:1] in (["--build"], ["--version"], ["--selftest"]):
+        argv = [argv[0][2:], *argv[1:]]  # the packaged app's own commands: Civspeak.exe --build, --version, --selftest
     if system.IS_WINDOWS:
         # A Windows console or pipe may not take every character of a Civilopedia page.
         for stream in (sys.stdout, sys.stderr):
