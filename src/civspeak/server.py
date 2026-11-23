@@ -796,17 +796,15 @@ class Answering:
         except online.LimitReached as e:
             if e.kind == "daily":
                 message = (
-                    f"You've reached today's free limit of {e.allowed} questions."
-                    if e.allowed
-                    else ("You've reached today's free limit of questions.")
+                    "You've reached today's free limit of questions. "
+                    "Answers start again tomorrow; the Civilopedia entries below still work."
                 )
-                message += " Answers start again tomorrow; the Civilopedia entries below still work."
             else:
                 message = (
                     "Civspeak has answered so many questions this month that answers are resting until next month. "
                     "The Civilopedia entries below still work."
                 )
-            reached = {"limit": e.kind, "allowed": e.allowed, "install_id": e.install_id, "email": LIMIT_EMAIL, "at": time.time()}
+            reached = {"limit": e.kind, "install_id": e.install_id, "email": LIMIT_EMAIL, "at": time.time()}
             state.reached = reached
             self._problem("limit", message, speaker, said=f"limit_{e.kind}", **reached)
             return "limit"

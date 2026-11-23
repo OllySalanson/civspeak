@@ -164,18 +164,20 @@ no general-purpose proxy, and it streams the answer back as JSON lines. A player
 under **Settings > Advanced** is answered with it directly instead, and only then do the Answers choice
 and the monthly spending limit show.
 
-- **Limits**, counted in Firestore in one transaction before every answer: 100 questions a day per
-  install (`CIVSPEAK_DAILY_QUESTIONS`), 300 a day per internet address (`CIVSPEAK_IP_DAILY_QUESTIONS`,
-  so made-up IDs do not get round the first), and a hard $18 a month for everyone
-  (`CIVSPEAK_MONTHLY_CAP_USD`), under the key's own $20 limit in the Claude Console. Each answer
-  reserves its worst case first and settles its real cost after, so the cap cannot be overshot.
+- **Limits**, counted in Firestore in one transaction before every answer: questions a day per
+  install (`CIVSPEAK_DAILY_QUESTIONS`), questions a day per internet address
+  (`CIVSPEAK_IP_DAILY_QUESTIONS`, so made-up IDs do not get round the first), and a hard monthly cap
+  in dollars for everyone (`CIVSPEAK_MONTHLY_CAP_USD`), set below the key's own spend limit in the
+  Claude Console. Each answer reserves its worst case first and settles its real cost after, so the
+  cap cannot be overshot. **The numbers are kept only in the service's settings on Cloud Run, never
+  in this repository** (`service/deploy.sh limits`); without them the service answers nothing.
   Days and months are UTC. Daily counters expire after 3 days (a Firestore TTL policy).
 - **The install ID** (`CS-XXXX-XXXX-XXXX`, random, made on first run, kept in `settings.json`) is all
   that identifies a player. When a limit is reached the app shows a pop-up with the ID, a Copy button
   and the address to email for a higher limit. Raise one, with no code change or rebuild:
 
   ```sh
-  service/deploy.sh raise CS-XXXX-XXXX-XXXX 500
+  service/deploy.sh raise CS-XXXX-XXXX-XXXX <questions a day>
   ```
 
 - **Privacy:** nothing a player asked is stored or logged: only counts, the install ID, a hash of the
@@ -185,11 +187,12 @@ and the monthly spending limit show.
   ```sh
   service/deploy.sh setup    # once: Firestore and its TTL policies, the service account, the image repository
   service/deploy.sh key      # the key from ~/.config/civspeak/answer-service-key, as a Secret Manager secret
-  service/deploy.sh          # build (Cloud Build, service/Dockerfile) and deploy; raised IDs are kept
+  service/deploy.sh limits <per install a day> <per address a day> <dollars a month>   # once, or to change them
+  service/deploy.sh          # build (Cloud Build, service/Dockerfile) and deploy; the limits and raised IDs are kept
   ```
 
 - **Cost:** on 22 Nov 2026 an answer cost $0.00006 to $0.00015 on the live service (Haiku 5.5,
-  about 2,700 input and 80 output tokens), so $18 covers well over 100,000 answers. Cloud Run scales
+  about 2,700 input and 80 output tokens). Cloud Run scales
   to zero (no charge while idle); a sleeping service takes a few seconds to start, so the app wakes
   it (`/healthz`) when it starts and when the talk key is pressed.
 - **Tests:** `tests/test_answer_service.py` runs the service with a fake Claude and counters in

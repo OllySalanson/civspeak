@@ -13,11 +13,12 @@ Before every answer, in one Firestore transaction, it counts the question agains
   real cost settled after, as spend.py does on a player's PC, so the cap can never be overshot.
 Refusals are HTTP 429 with {"limit": "daily" | "monthly"}, which the app turns into its pop-up.
 
-Settings are environment variables, changed with `gcloud run services update` (no code change):
-  CIVSPEAK_DAILY_QUESTIONS     questions a day per install (default 100)
-  CIVSPEAK_IP_DAILY_QUESTIONS  questions a day per internet address (default 300); raised IDs skip it
-  CIVSPEAK_MONTHLY_CAP_USD     the hard monthly cap for everyone, in dollars (default 18)
-  CIVSPEAK_RAISED              raised daily limits per ID: "CS-AAAA-BBBB-CCCC=500 CS-DDDD-EEEE-FFFF=1000"
+Settings are environment variables on the service, set with service/deploy.sh (no code change). The
+limits' numbers live only there, never in this repository; without them the service answers nothing.
+  CIVSPEAK_DAILY_QUESTIONS     questions a day per install
+  CIVSPEAK_IP_DAILY_QUESTIONS  questions a day per internet address; raised IDs skip it
+  CIVSPEAK_MONTHLY_CAP_USD     the hard monthly cap for everyone, in dollars
+  CIVSPEAK_RAISED              raised daily limits per ID: "CS-AAAA-BBBB-CCCC=<n> CS-DDDD-EEEE-FFFF=<n>"
   CIVSPEAK_SERVICE_ANSWERS     quick | balanced | best (default quick)
   CIVSPEAK_SERVICE_KEY         the key (a Secret Manager secret; never logged)
 Days and months are counted in UTC. Nothing a player asked is stored or logged: only counts, the
@@ -42,9 +43,6 @@ from .answer import CHOICES, Answerer, AnswerError, Result
 
 log = logging.getLogger("civspeak.answer_service")
 
-DEFAULT_DAILY = 100
-DEFAULT_IP_DAILY = 300
-DEFAULT_MONTHLY_CAP_USD = 18.0
 MAX_BODY_BYTES = 200_000
 MAX_QUESTION_CHARS = 500
 MAX_ENTRIES = 8
@@ -53,10 +51,13 @@ KEEP_DAYS = 3  # daily counters carry an expiry this far ahead (a Firestore TTL 
 
 
 class Refused(Exception):
-    def __init__(self, kind: str, allowed: int = 0):
+    def __init__(self, kind: str):
         super().__init__(kind)
         self.kind = kind  # "daily" (this install or this address) or "monthly" (everyone)
-        self.allowed = allowed
+
+
+class NotConfigured(RuntimeError):
+    """A limit is missing from the service's settings: it answers nothing rather than guess one."""
 
 
 @dataclass(frozen=True)
@@ -70,17 +71,19 @@ class Limits:
         return self.raised.get(install, self.daily)
 
 
-def _number(name: str, default: float, kind=int):
+def _number(name: str, kind=int):
+    text = os.environ.get(name, "").strip()
     try:
-        value = kind(os.environ.get(name, default))
+        value = kind(text)
     except ValueError:
-        log.error("%s is not a number; using %s", name, default)
-        return kind(default)
-    return value if value >= 0 else kind(default)
+        raise NotConfigured(f"{name} is not set to a number") from None
+    if value < 0:
+        raise NotConfigured(f"{name} is negative")
+    return value
 
 
 def parse_raised(text: str) -> dict[str, int]:
-    """ "CS-AAAA-BBBB-CCCC=500 CS-DDDD-EEEE-FFFF=1000" (spaces or commas between) -> {id: limit}."""
+    """ "CS-AAAA-BBBB-CCCC=<n> CS-DDDD-EEEE-FFFF=<n>" (spaces or commas between) -> {id: limit}."""
     raised = {}
     for item in text.replace(",", " ").split():
         install, _, number = item.partition("=")
@@ -94,9 +97,9 @@ def parse_raised(text: str) -> dict[str, int]:
 
 def limits() -> Limits:
     return Limits(
-        daily=_number("CIVSPEAK_DAILY_QUESTIONS", DEFAULT_DAILY),
-        ip_daily=_number("CIVSPEAK_IP_DAILY_QUESTIONS", DEFAULT_IP_DAILY),
-        cap_usd=_number("CIVSPEAK_MONTHLY_CAP_USD", DEFAULT_MONTHLY_CAP_USD, float),
+        daily=_number("CIVSPEAK_DAILY_QUESTIONS"),
+        ip_daily=_number("CIVSPEAK_IP_DAILY_QUESTIONS"),
+        cap_usd=_number("CIVSPEAK_MONTHLY_CAP_USD", float),
         raised=parse_raised(os.environ.get("CIVSPEAK_RAISED", "")),
     )
 
@@ -127,12 +130,12 @@ class MemoryStore:
         with self.lock:
             asked = self.installs.get((day, install), 0)
             if asked >= allowed:
-                raise Refused("daily", allowed)
+                raise Refused("daily")
             from_address = self.addresses.get((day, address), 0)
             if ip_allowed is not None and from_address >= ip_allowed:
-                raise Refused("daily", allowed)
+                raise Refused("daily")
             if self.months.get(month, 0.0) + usd > cap_usd:
-                raise Refused("monthly", allowed)
+                raise Refused("monthly")
             self.installs[(day, install)] = asked + 1
             self.addresses[(day, address)] = from_address + 1
             self.months[month] = self.months.get(month, 0.0) + usd
@@ -177,11 +180,11 @@ class FirestoreStore:
             from_address = int(field(address_ref, "count", 0))
             spent = float(field(month_ref, "usd", 0.0))
             if asked >= allowed:
-                raise Refused("daily", allowed)
+                raise Refused("daily")
             if ip_allowed is not None and from_address >= ip_allowed:
-                raise Refused("daily", allowed)
+                raise Refused("daily")
             if spent + usd > cap_usd:
-                raise Refused("monthly", allowed)
+                raise Refused("monthly")
             transaction.set(install_ref, {"count": asked + 1, "expires": expires})
             transaction.set(address_ref, {"count": from_address + 1, "expires": expires})
             transaction.set(month_ref, {"usd": spent + usd})
@@ -358,7 +361,10 @@ def make_app(service: Service | None = None):
             lines = await run_in_threadpool(svc.start, install, address, question, entries, spoken)
         except Refused as e:
             log.info("refused %s: %s limit", install, e.kind)
-            return JSONResponse({"limit": e.kind, "allowed": e.allowed}, 429)
+            return JSONResponse({"limit": e.kind}, 429)
+        except NotConfigured as e:
+            log.error("not answering: %s", e)
+            return JSONResponse({"error": "Answers are not available right now."}, 503)
         except AnswerError as e:
             log.warning("no answer for %s: %s", install, e)
             return JSONResponse({"error": str(e)}, 502)

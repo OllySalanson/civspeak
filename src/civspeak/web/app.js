@@ -904,9 +904,7 @@ function showLimit(data) {
   $("limit-title").textContent = daily ? "Congratulations! You're a Civspeak power user" : "Answers are resting";
   $("limit-daily").hidden = !daily;
   $("limit-monthly").hidden = daily;
-  $("limit-reached").textContent = data.allowed
-    ? `You've asked ${data.allowed} questions today. That's the free limit for one day.`
-    : "You've reached the free limit for one day.";
+  $("limit-reached").textContent = "You've asked so many questions today that you've reached the free limit for one day.";
   $("limit-id").textContent = data.install_id;
   const mail = $("limit-mail");
   mail.textContent = data.email;

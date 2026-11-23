@@ -43,7 +43,7 @@ George answers out loud. You stay in the game.
 - **Esc** stops George.
 - You can also **type** a question in the Civspeak window.
 
-Civspeak is free, with nothing to sign up for. Each computer can ask up to 100 questions a day.
+Civspeak is free, with nothing to sign up for.
 
 ## The star by the clock
 

@@ -64,13 +64,12 @@ def service_url() -> str:
 
 class LimitReached(RuntimeError):
     """The service said no more today (kind "daily", for this install) or this month (kind "monthly",
-    for everyone). `allowed` is the daily number of questions for this install."""
+    for everyone)."""
 
-    def __init__(self, kind: str, install: str, allowed: int = 0):
+    def __init__(self, kind: str, install: str):
         super().__init__(f"{kind} limit reached")
         self.kind = kind
         self.install_id = install
-        self.allowed = allowed
 
 
 class AnswerService:
@@ -168,8 +167,7 @@ def _refusal(e: urllib.error.HTTPError, me: str) -> Exception:
     if not isinstance(info, dict):
         info = {}
     if e.code == 429 and info.get("limit") in ("daily", "monthly"):
-        allowed = info.get("allowed")
-        return LimitReached(info["limit"], me, allowed if isinstance(allowed, int) else 0)
+        return LimitReached(info["limit"], me)
     log.info("answer service said %s: %s", e.code, info.get("error"))
     if e.code >= 500:
         return AnswerError("Answers are having trouble right now. Try again in a moment.")
