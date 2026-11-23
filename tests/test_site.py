@@ -43,7 +43,8 @@ def test_everything_the_stylesheet_points_at_exists():
     css = (SITE / "css" / "site.css").read_text(encoding="utf-8")
     files = set(re.findall(r"url\(\.\./([^)]+)\)", css))
     assert len([f for f in files if f.startswith("fonts/")]) >= 3
-    assert "img/paint/brush.webp" in files and "img/paint/edge.svg" in files, "the sections are painted with these"
+    for paint in ("brush.webp", "edge.svg", "wood.webp"):
+        assert f"img/paint/{paint}" in files, f"the sections are painted with {paint}"
     for file in files:
         assert (SITE / file).is_file(), f"{file} is used by the stylesheet but is not in site/"
     assert list((SITE / "fonts").glob("OFL-*.txt")), "each font family needs its licence beside it"

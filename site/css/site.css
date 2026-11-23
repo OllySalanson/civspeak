@@ -10,7 +10,7 @@
 :root{
   --navy:#0e1634;--navy-2:#141c45;--navy-3:#1c2760;--line:rgba(242,230,203,.16);
   --ivory:#f2e6cb;--parch:#f6ead0;--ink:#1b1f4b;--gold:#f2c24b;--gold-dark:#b98718;--muted:#c6bfdc;
-  --dusk:#352c62;--paper:#f0e2c2;--paper-ink:#2a2140;--rust:#b4532f;--night:#2b2150;--earth:#14161f;
+  --desk:#58392a;--paper:#f0e2c2;--paper-ink:#2a2140;--rust:#b4532f;--night:#2b2150;--earth:#14161f;
   --serif:"Instrument Serif",Georgia,serif;--display:"Cormorant Garamond",Georgia,serif;--sans:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;
 }
 *{box-sizing:border-box}
@@ -85,7 +85,10 @@ h2 em{font-style:italic}
 .fine{margin-top:14px;font-size:14px;line-height:1.5;color:var(--muted);max-width:34em}
 
 /* try it */
-.try{background-color:var(--dusk)}
+/* Try it is a desk top: painted boards, with the scroll lying on them */
+.try{background-color:var(--desk);background-image:url(../img/paint/wood.webp);background-size:cover;background-position:50% 50%;background-blend-mode:normal}
+.try .fine{color:#dccdb0}
+.try .chips button{border-color:rgba(246,234,208,.45)}
 .two{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:56px;align-items:start}
 .ask.big{margin-top:28px;height:56px;width:min(480px,100%)}
 .ask.big input{font-size:17px}

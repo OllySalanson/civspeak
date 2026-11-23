@@ -350,8 +350,9 @@ python3 -m http.server 5197 -d site      # then open http://localhost:5197
 - **The painted look below the hero** is in `site/img/paint/`: `brush.webp` is a grey brush
   texture that tiles and is blended over each section's plain colour, `edge.svg` is the ragged
   edge where one section's paint is brushed over the one above, `key`, `ask` and `answer` are the
-  small paintings in How it works, and `band.webp` is the telegraph office painted as a strip
-  along the foot of the page, running into the footer. The
+  small paintings in How it works, `wood.webp` is the painted desk top behind Try it, and
+  `band.webp` is the telegraph office painted as a strip along the foot of the page, running into
+  the footer. The
   section colours are the variables at the top of `site/css/site.css`.
 - **No sound files.** `tools/repo_guard.py` refuses recordings, so the answer in Ask it yourself
   is read by the browser's own speech. Nothing plays until Ask is pressed.
