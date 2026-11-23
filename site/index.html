@@ -20,8 +20,9 @@
 
 <header class="hero" id="top">
  <div class="stage">
-  <!-- The hero's picture. One painting for each age, 3200 by 1000 with what matters in the middle
-       and the top two fifths plain sky. To change the art, replace the files in img/ages/. -->
+  <!-- The hero's picture. One painting for each age, shown one at a time; the arrows step through them.
+       Each is 3200 by 1000 with what matters in the middle and the top two fifths plain sky.
+       To change the art, replace the files in img/ages/. -->
   <div class="hero-art" id="art" aria-live="off">
     <img class="age-img on" src="img/ages/1-ancient.webp" width="2560" height="800" alt="" id="art-first">
   </div>
@@ -46,17 +47,10 @@
     </div>
     <p class="meta">Free. For Civilization VI on Windows.</p>
   </div>
- </div>
 
-  <div class="ages" id="ages">
-    <div class="age-bar">
-      <button class="step" id="age-prev" type="button" aria-label="The age before"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
-      <p class="age-name" id="age-name"><b></b><span></span></p>
-      <button class="btn gold small" id="age-play" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg><span>Hear the question</span></button>
-      <button class="step" id="age-next" type="button" aria-label="The next age"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg></button>
-    </div>
-    <p class="age-line" id="age-line"></p>
-  </div>
+  <button class="step prev" id="age-prev" type="button" aria-label="The picture before"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+  <button class="step next" id="age-next" type="button" aria-label="The next picture"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg></button>
+ </div>
 </header>
 
 <main>

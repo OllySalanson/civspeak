@@ -36,7 +36,7 @@ button{cursor:pointer}
 
 /* the hero */
 .hero{text-align:center}
-.stage{position:relative;min-height:max(600px,calc(100svh - 132px));overflow:hidden;isolation:isolate}
+.stage{position:relative;min-height:max(640px,100svh);overflow:hidden;isolation:isolate}
 .hero-art{position:absolute;left:0;right:0;bottom:0;height:72%;z-index:-1;-webkit-mask-image:linear-gradient(transparent 0,#000 14%);mask-image:linear-gradient(transparent 0,#000 14%)}
 .age-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:57.5% 100%;opacity:0;transition:opacity .7s ease}
 .age-img.on{opacity:1}
@@ -65,18 +65,11 @@ button{cursor:pointer}
 .mic.on{background:#c5351f;animation:pulse 1s infinite}
 @keyframes pulse{50%{box-shadow:0 0 0 8px rgba(197,53,31,.25)}}
 
-.ages{display:grid;justify-items:center;gap:10px;padding:14px 12px 20px;background:#0a1030;border-top:1px solid var(--line);min-height:132px;align-content:center}
-.age-line{max-width:min(820px,100%);font:400 clamp(20px,2.1vw,28px)/1.25 var(--serif);text-wrap:balance}
-.age-line:empty{display:none}
-.age-line small{display:inline-block;font:600 11px/1.2 var(--sans);letter-spacing:.18em;text-transform:uppercase;color:var(--gold);margin-right:12px;vertical-align:middle}
-.age-line.wire{font-family:ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;font-size:clamp(16px,1.6vw,21px);letter-spacing:.04em}
-.age-bar{display:flex;align-items:center;gap:8px;padding:6px;border-radius:999px;background:var(--navy-2);border:1px solid var(--line);max-width:100%}
-.step{flex:none;width:38px;height:38px;border-radius:50%;border:1px solid var(--line);background:none;display:grid;place-items:center}
-.step:hover{background:rgba(242,230,203,.1)}
-.step svg{width:18px;height:18px;fill:none;stroke:var(--ivory);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
-.age-name{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:center;column-gap:10px;padding:0 10px;font-size:15px;line-height:1.25;min-width:0}
-.age-name b{font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);font-weight:600;white-space:nowrap}
-.age-name span{white-space:nowrap}
+.step{position:absolute;bottom:22px;z-index:2;width:46px;height:46px;border-radius:50%;border:1px solid rgba(242,230,203,.35);background:rgba(14,22,52,.6);display:grid;place-items:center;transition:background .15s}
+.step:hover{background:rgba(14,22,52,.9)}
+.step.prev{left:22px}
+.step.next{right:22px}
+.step svg{width:20px;height:20px;fill:none;stroke:var(--ivory);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
 
 /* sections */
 section{padding:96px 0}
@@ -153,8 +146,9 @@ h2 em{font-style:italic}
   .bar .btn{display:none}
   .hero-copy{padding-top:84px}
   .hero-row .btn{width:min(460px,100%)}
-  .age-bar{border-radius:22px;flex-wrap:wrap;justify-content:center;row-gap:6px;padding:8px}
-  .age-name{order:-1;flex-basis:100%}
+  .step{width:40px;height:40px;bottom:14px}
+  .step.prev{left:12px}
+  .step.next{right:12px}
   .paper{padding:30px 24px 26px}
   .scroll{margin:0 16px}
   .rod,.curl{margin:0 -16px}
@@ -163,6 +157,6 @@ h2 em{font-style:italic}
 @media (prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}
   .age-img{transition:none}
-  .btn{transition:none}
+  .btn,.step{transition:none}
   .speaking .wave i,.mic.on{animation:none}
 }
