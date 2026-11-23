@@ -39,12 +39,13 @@ def test_every_file_the_page_points_at_exists():
         assert (SITE / link).is_file(), f"{link} is linked from the page but is not in site/"
 
 
-def test_the_stylesheet_fonts_exist():
+def test_everything_the_stylesheet_points_at_exists():
     css = (SITE / "css" / "site.css").read_text(encoding="utf-8")
-    fonts = re.findall(r"url\(\.\./(fonts/[^)]+)\)", css)
-    assert len(fonts) >= 3
-    for font in fonts:
-        assert (SITE / font).is_file(), f"{font} is used by the stylesheet but is not in site/"
+    files = set(re.findall(r"url\(\.\./([^)]+)\)", css))
+    assert len([f for f in files if f.startswith("fonts/")]) >= 3
+    assert "img/paint/brush.webp" in files and "img/paint/edge.svg" in files, "the sections are painted with these"
+    for file in files:
+        assert (SITE / file).is_file(), f"{file} is used by the stylesheet but is not in site/"
     assert list((SITE / "fonts").glob("OFL-*.txt")), "each font family needs its licence beside it"
 
 
