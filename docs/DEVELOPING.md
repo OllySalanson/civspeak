@@ -345,12 +345,13 @@ python3 -m http.server 5197 -d site      # then open http://localhost:5197
   for each age, shown one at a time; two arrows on the picture step through them. Each is 3200 by
   1000 (saved at 2560 by 800) with what matters in the middle and the top two fifths plain night
   sky, because the heading sits over it. To change the art, replace the files; their names and
-  descriptions are in the `AGES` list in `site/js/site.js`. `docs/site-art/previous/` keeps the
-  last version of any picture that was changed, to go back to.
+  descriptions are in the `AGES` list in `site/js/site.js`. `docs/site-art/previous/` keeps
+  the earlier versions of any picture that was changed (`-v1`, `-v2`, oldest first), to go back to.
 - **The painted look below the hero** is in `site/img/paint/`: `brush.webp` is a grey brush
   texture that tiles and is blended over each section's plain colour, `edge.svg` is the ragged
   edge where one section's paint is brushed over the one above, `key`, `ask` and `answer` are the
-  small paintings in How it works, and `band.webp` is the valley at night under Download. The
+  small paintings in How it works, and `band.webp` is the telegraph office painted as a strip
+  along the foot of the page, running into the footer. The
   section colours are the variables at the top of `site/css/site.css`.
 - **No sound files.** `tools/repo_guard.py` refuses recordings, so the answer in Ask it yourself
   is read by the browser's own speech. Nothing plays until Ask is pressed.

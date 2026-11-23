@@ -1,5 +1,5 @@
 /* Civ Speak's website. Paintings in the hero, and the same gouache below: painted washes, ragged
-   brush edges between sections, small paintings in How it works, the valley at night in Download. */
+   brush edges between sections, small paintings in How it works, the telegraph office along the foot. */
 
 @font-face{font-family:"Cormorant Garamond";font-style:normal;font-weight:400 700;font-display:swap;src:url(../fonts/cormorant-garamond.woff2) format("woff2")}
 @font-face{font-family:"Cormorant Garamond";font-style:italic;font-weight:400 700;font-display:swap;src:url(../fonts/cormorant-garamond-italic.woff2) format("woff2")}
@@ -127,9 +127,9 @@ h2 em{font-style:italic}
 .facts b{display:block;color:var(--paper-ink);font-weight:600}
 
 /* download */
-.get{text-align:center;background-color:var(--night);padding-bottom:calc(clamp(170px,22vw,400px) + 20px)}
-.band{position:absolute;left:0;right:0;bottom:0;height:clamp(190px,26vw,464px);-webkit-mask-image:linear-gradient(transparent 0,#000 32%);mask-image:linear-gradient(transparent 0,#000 32%)}
-.band img{width:100%;height:100%;object-fit:cover;object-position:50% 100%}
+.get{text-align:center;background-color:var(--night);padding-bottom:calc(clamp(190px,27vw,470px) + 30px)}
+.band{position:absolute;left:0;right:0;bottom:0;height:clamp(210px,30vw,512px);-webkit-mask-image:linear-gradient(transparent 0,#000 22%);mask-image:linear-gradient(transparent 0,#000 22%)}
+.band img{width:100%;height:100%;object-fit:cover;object-position:57.5% 100%}
 .get .sub,.get .fine{margin-left:auto;margin-right:auto}
 .get .btn{margin-top:30px;height:56px;padding:0 34px;font-size:18px}
 .get .fine+.fine{margin-top:8px}
@@ -154,6 +154,7 @@ h2 em{font-style:italic}
   .bar .btn{display:none}
   .hero-copy{padding-top:84px}
   .hero-row .btn{width:min(460px,100%)}
+  .band img{object-position:54% 100%}
   .step{width:40px;height:40px;bottom:14px}
   .step.prev{left:12px}
   .step.next{right:12px}
