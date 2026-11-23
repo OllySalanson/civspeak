@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Civ Speak - a voice Civilopedia for Civilization VI</title>
+<meta name="description" content="Speak to the Civilopedia, and it speaks back. Hold a key in Civilization VI, ask out loud, and hear the answer. Free, for Windows.">
+<meta name="theme-color" content="#0e1634">
+<meta property="og:title" content="Civ Speak">
+<meta property="og:description" content="Every age had someone to ask. Now you do too. A voice Civilopedia for Civilization VI.">
+<meta property="og:type" content="website">
+<link rel="icon" href="img/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="fonts/cormorant-garamond.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/inter.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="img/ages/1-ancient.webp" as="image">
+<link rel="stylesheet" href="css/site.css">
+</head>
+<body>
+<a class="skip" href="#try">Skip to Try it</a>
+
+<header class="hero" id="top">
+ <div class="stage">
+  <!-- The hero's picture. One painting for each age, 3200 by 1000 with what matters in the middle
+       and the top two fifths plain sky. To change the art, replace the files in img/ages/. -->
+  <div class="hero-art" id="art" aria-live="off">
+    <img class="age-img on" src="img/ages/1-ancient.webp" width="2560" height="800" alt="" id="art-first">
+  </div>
+
+  <nav class="bar" aria-label="Main">
+    <a class="brand" href="#top"><img src="img/logo.svg" width="30" height="30" alt=""><span>Civ <i>Speak</i></span></a>
+    <a class="link" href="#try">Try it</a>
+    <a class="link" href="#how">How it works</a>
+    <a class="btn gold small" href="https://github.com/OllySalanson/civspeak/releases/latest/download/Civspeak-Setup.exe">Download</a>
+  </nav>
+
+  <div class="hero-copy">
+    <h1>Every age had someone to ask.<br><em>Now you do too.</em></h1>
+    <p class="lede">Speak to the Civilopedia, and it speaks back.</p>
+    <div class="hero-row">
+      <form class="ask" id="hero-ask" action="#try">
+        <label class="sr" for="hero-q">Ask a question about Civilization VI</label>
+        <input id="hero-q" type="text" autocomplete="off" placeholder="Ask it anything about Civ VI">
+        <button class="ask-go" type="submit">Ask</button>
+      </form>
+      <a class="btn line" href="https://github.com/OllySalanson/civspeak/releases/latest/download/Civspeak-Setup.exe">Download for Windows</a>
+    </div>
+    <p class="meta">Free. For Civilization VI on Windows.</p>
+  </div>
+ </div>
+
+  <div class="ages" id="ages">
+    <div class="age-bar">
+      <button class="step" id="age-prev" type="button" aria-label="The age before"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <p class="age-name" id="age-name"><b></b><span></span></p>
+      <button class="btn gold small" id="age-play" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg><span>Hear the question</span></button>
+      <button class="step" id="age-next" type="button" aria-label="The next age"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg></button>
+    </div>
+    <p class="age-line" id="age-line"></p>
+  </div>
+</header>
+
+<main>
+<section class="try" id="try">
+  <div class="wrap two">
+    <div class="try-left">
+      <p class="kick">Try it</p>
+      <h2>Go on. <em>Ask it something.</em></h2>
+      <p class="sub">Type it or say it. In the game you just hold a key and talk.</p>
+      <form class="ask big" id="try-ask">
+        <label class="sr" for="try-q">Your question</label>
+        <input id="try-q" type="text" autocomplete="off" placeholder="How do I get Great Prophets?">
+        <button class="mic" id="try-mic" type="button" aria-label="Say your question" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none"/></svg></button>
+        <button class="ask-go" type="submit">Ask</button>
+      </form>
+      <div class="chips" id="try-chips"></div>
+      <p class="fine" id="try-note">This page knows a handful of answers, and your browser reads them out. In the game, George answers anything in your Civilopedia.</p>
+    </div>
+    <div class="try-right">
+      <div class="scroll" id="scroll">
+        <i class="rod" aria-hidden="true"></i>
+        <div class="paper">
+          <p class="q" id="scroll-q">How do I get Great Prophets?</p>
+          <p class="a" id="scroll-a" aria-live="polite"></p>
+          <div class="george" id="scroll-george"><span class="wave" aria-hidden="true"></span><span id="scroll-status">Press Ask to hear it</span></div>
+        </div>
+        <i class="curl" aria-hidden="true"></i>
+      </div>
+      <div class="second" id="second"><b>On your second screen</b><span class="entries" id="entries"></span></div>
+    </div>
+  </div>
+</section>
+
+<section class="how" id="how">
+  <div class="wrap">
+    <p class="kick">How it works</p>
+    <h2>Hold a key. <em>Ask out loud.</em></h2>
+    <ol class="steps">
+      <li><span class="num">1</span>
+        <svg class="pic" viewBox="0 0 96 96" aria-hidden="true"><rect x="16" y="20" width="64" height="56" rx="12" fill="#1c2658" stroke="#f2c24b" stroke-width="3"/><rect x="24" y="26" width="48" height="40" rx="8" fill="#27336e"/><text x="48" y="58" text-anchor="middle" font-family="Georgia,serif" font-size="34" fill="#f6ead0">`</text></svg>
+        <h3>Hold the ` key</h3><p>It is the key under Esc. Hold it down in Civilization VI. You stay in the game.</p></li>
+      <li><span class="num">2</span>
+        <svg class="pic" viewBox="0 0 96 96" aria-hidden="true"><rect x="38" y="14" width="20" height="40" rx="10" fill="#f2c24b"/><path d="M26 44a22 22 0 0 0 44 0M48 66v14M34 80h28" fill="none" stroke="#f6ead0" stroke-width="5" stroke-linecap="round"/></svg>
+        <h3>Ask your question</h3><p>Say it the way you would say it to a friend. Then let go of the key.</p></li>
+      <li><span class="num">3</span>
+        <svg class="pic" viewBox="0 0 96 96" aria-hidden="true"><rect x="20" y="24" width="56" height="44" fill="#f6ead0"/><rect x="12" y="18" width="12" height="56" rx="6" fill="#f2c24b"/><rect x="72" y="18" width="12" height="56" rx="6" fill="#f2c24b"/><g fill="#1b1f4b"><rect x="32" y="40" width="4" height="12" rx="2"/><rect x="40" y="34" width="4" height="24" rx="2"/><rect x="48" y="38" width="4" height="16" rx="2"/><rect x="56" y="31" width="4" height="30" rx="2"/><rect x="64" y="41" width="4" height="10" rx="2"/></g></svg>
+        <h3>George answers</h3><p>You hear a short answer. The full Civilopedia entries open on your second screen.</p></li>
+    </ol>
+    <ul class="facts">
+      <li><b>It reads your own game.</b> Your expansions, your DLC and your mods.</li>
+      <li><b>Your voice stays on your PC.</b> It is turned into text there. No audio leaves it.</li>
+      <li><b>Nothing to sign up for.</b> Install it, load a game once, and ask.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="get" id="download">
+  <div class="wrap">
+    <p class="kick">Download</p>
+    <h2>One more turn. <em>One more question.</em></h2>
+    <p class="sub">It is 2am. You were going to bed three questions ago.</p>
+    <a class="btn gold" href="https://github.com/OllySalanson/civspeak/releases/latest/download/Civspeak-Setup.exe">Download for Windows</a>
+    <p class="fine">Free. For Windows 10 and 11. You need Civilization VI.</p>
+    <p class="fine">Windows may say it protected your PC, because Civ Speak is new. Click More info, then Run anyway. You only do this once.</p>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <a class="brand" href="#top"><img src="img/logo.svg" width="26" height="26" alt=""><span>Civ <i>Speak</i></span></a>
+    <p><a href="https://github.com/OllySalanson/civspeak/releases/latest">Release notes</a> <a href="https://github.com/OllySalanson/civspeak">Source code</a> <span>Free software, GPL-3.0</span></p>
+  </div>
+</footer>
+
+<script src="js/site.js" defer></script>
+</body>
+</html>

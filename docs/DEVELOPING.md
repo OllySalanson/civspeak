@@ -327,6 +327,31 @@ Each question is a real Claude call (about 2 cents on Best):
 .venv/bin/python tools/voice_check.py --wav my-question.wav   # a real recording
 ```
 
+### The website
+
+The website is the plain files in `site/`: one page (`index.html`), one stylesheet, one script, the
+fonts and the pictures. There is no build step. `.github/workflows/pages.yml` publishes the folder
+to GitHub Pages (<https://ollysalanson.github.io/civspeak/>) whenever `site/` changes on `main`.
+To look at it here:
+
+```sh
+python3 -m http.server 5197 -d site      # then open http://localhost:5197
+```
+
+- **The hero's pictures** are `site/img/ages/1-ancient.webp` to `8-information.webp`, one painting
+  for each age, shown one at a time with arrows. Each is 3200 by 1000 (saved at 2560 by 800) with
+  what matters in the middle and the top two fifths plain night sky, because the heading sits over
+  it. To change the art, replace the files; the names and the words read out for them are in the
+  `AGES` list in `site/js/site.js`.
+- **No sound files.** `tools/repo_guard.py` refuses recordings, so the voices are the browser's
+  own speech and the background sounds are made in the page (`ambience` in `site/js/site.js`).
+  Nothing plays until something is pressed.
+- **Ask it yourself** answers from the short `ANSWERS` list in `site/js/site.js`, written for the
+  page. A web page has no game to read, so it cannot look anything else up.
+- `tests/test_site.py` holds the site's rules: every linked file exists, Download fetches the
+  latest installer, and the words never name who writes the answers, any limit on asking, or the
+  game's makers.
+
 `tools/repo_guard.py` runs as the pre-commit hook (and as a test): it refuses game file types, the
 index, the key, anything that looks like an API key, game-style text rows outside the test fixture,
 any sentence from your built Civilopedia, and voice models or recordings.
