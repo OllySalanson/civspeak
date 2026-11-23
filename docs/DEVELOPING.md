@@ -339,13 +339,13 @@ python3 -m http.server 5197 -d site      # then open http://localhost:5197
 ```
 
 - **The hero's pictures** are `site/img/ages/1-ancient.webp` to `8-information.webp`, one painting
-  for each age, shown one at a time with arrows. Each is 3200 by 1000 (saved at 2560 by 800) with
-  what matters in the middle and the top two fifths plain night sky, because the heading sits over
-  it. To change the art, replace the files; the names and the words read out for them are in the
-  `AGES` list in `site/js/site.js`.
-- **No sound files.** `tools/repo_guard.py` refuses recordings, so the voices are the browser's
-  own speech and the background sounds are made in the page (`ambience` in `site/js/site.js`).
-  Nothing plays until something is pressed.
+  for each age, shown one at a time; two arrows on the picture step through them. Each is 3200 by
+  1000 (saved at 2560 by 800) with what matters in the middle and the top two fifths plain night
+  sky, because the heading sits over it. To change the art, replace the files; their names and
+  descriptions are in the `AGES` list in `site/js/site.js`. `docs/site-art/previous/` keeps the
+  last version of any picture that was changed, to go back to.
+- **No sound files.** `tools/repo_guard.py` refuses recordings, so the answer in Ask it yourself
+  is read by the browser's own speech. Nothing plays until Ask is pressed.
 - **Ask it yourself** answers from the short `ANSWERS` list in `site/js/site.js`, written for the
   page. A web page has no game to read, so it cannot look anything else up.
 - `tests/test_site.py` holds the site's rules: every linked file exists, Download fetches the

@@ -62,6 +62,16 @@ def test_there_is_a_painting_for_each_of_the_eight_ages():
         assert f'"{picture}"' in script, f"the script does not show {name}"
 
 
+def test_the_strip_of_questions_under_the_picture_is_gone():
+    # Taken out on 23 Nov 2026: the picture has two plain arrows and nothing else under it.
+    html = PAGE.read_text(encoding="utf-8")
+    script = (SITE / "js" / "site.js").read_text(encoding="utf-8")
+    for gone in ("age-line", "age-play", "age-name", "Hear the question", "By the fire"):
+        assert gone not in html and gone not in script, f"{gone!r} belongs to the strip that was removed"
+    assert 'id="age-prev"' in html and 'id="age-next"' in html
+    assert "AudioContext" not in script, "the page makes no sounds of its own; only the answer is read out"
+
+
 def test_the_menu_bar_is_try_it_how_it_works_and_download():
     html = PAGE.read_text(encoding="utf-8")
     bar = html[html.index('<nav class="bar"') : html.index("</nav>")]
@@ -88,6 +98,6 @@ def test_the_main_lines_are_the_ones_chosen():
 
 
 def test_the_site_ships_no_sound_files():
-    # tools/repo_guard.py refuses recordings; the site's voices are the browser's and its sounds are made in the page.
+    # tools/repo_guard.py refuses recordings; the answer is read by the browser's own voice.
     sounds = [p.name for p in SITE.rglob("*") if p.suffix.lower() in {".mp3", ".ogg", ".wav", ".webm", ".flac", ".m4a"}]
     assert sounds == []
