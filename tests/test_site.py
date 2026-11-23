@@ -102,3 +102,12 @@ def test_the_site_ships_no_sound_files():
     # tools/repo_guard.py refuses recordings; the answer is read by the browser's own voice.
     sounds = [p.name for p in SITE.rglob("*") if p.suffix.lower() in {".mp3", ".ogg", ".wav", ".webm", ".flac", ".m4a"}]
     assert sounds == []
+
+
+def test_the_site_is_packed_and_published_in_two_jobs():
+    # In one job the deploy looked for the upload before GitHub had listed it, and the publish failed.
+    workflow = (SITE.parent / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
+    jobs = workflow[workflow.index("\njobs:") :]
+    pack, publish = jobs.split("\n  publish:")
+    assert "upload-pages-artifact" in pack and "deploy-pages" not in pack
+    assert "needs: pack" in publish and "deploy-pages" in publish and "upload-pages-artifact" not in publish

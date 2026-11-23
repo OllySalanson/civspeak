@@ -332,6 +332,9 @@ Each question is a real Claude call (about 2 cents on Best):
 The website is the plain files in `site/`: one page (`index.html`), one stylesheet, one script, the
 fonts and the pictures. There is no build step. `.github/workflows/pages.yml` publishes the folder
 to GitHub Pages (<https://ollysalanson.github.io/civspeak/>) whenever `site/` changes on `main`.
+It packs the folder in one job and publishes it in a second: in a single job the publish step can
+ask for the packed files before GitHub has listed them, and fail. If a publish ever fails, run the
+workflow again by hand from the Actions tab (`gh workflow run pages.yml --ref main`).
 To look at it here:
 
 ```sh
