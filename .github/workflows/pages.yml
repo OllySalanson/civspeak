@@ -1,6 +1,11 @@
 # Publishes the website (the plain files in site/, no build step) to GitHub Pages:
 # https://ollysalanson.github.io/civspeak/
 # Runs when site/ changes on main, or by hand from the Actions tab.
+#
+# Two jobs on purpose. With the upload and the deploy in one job, the deploy asked for the uploaded
+# files a third of a second after they were sent, before GitHub had listed them, and failed with
+# "No artifacts named github-pages were found" (23 Nov 2026, two publishes in a row). A second job
+# starts seconds later, by which time they are there.
 name: Publish the website
 
 on:
@@ -17,21 +22,27 @@ concurrency:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 jobs:
-  publish:
+  pack:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  publish:
+    needs: pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v4
-        with:
-          path: site
       - id: deploy
         uses: actions/deploy-pages@v4
